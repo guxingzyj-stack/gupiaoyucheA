@@ -294,12 +294,15 @@ class LSTMPredictor:
         if len(X) == 0:
             raise ValueError("数据不足，无法创建训练序列")
         
-        train_mask = starts < split_idx
+        train_end = split_idx - self.prediction_days
+        train_mask = starts < train_end
         val_mask   = starts >= split_idx
         X_tr, X_val = X[train_mask], X[val_mask]
         y_tr, y_val = y[train_mask], y[val_mask]
         base_val    = base_prices[val_mask]
-        if len(X_tr) == 0 or len(X_val) == 0:
+        if len(X_tr) < 60:
+            raise ValueError("purge 后训练集少于 60 条，无法训练 LSTM 模型")
+        if len(X_val) == 0:
             raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
         print(f"Keras训练集：{X_tr.shape}，验证集：{X_val.shape}")
@@ -331,12 +334,15 @@ class LSTMPredictor:
         X, y, starts, base_prices = self._make_sequences_mlp(data, close_idx, close_values)
         if len(X) < 30:
             raise ValueError("训练数据不足")
-        train_mask = starts < split_idx
+        train_end = split_idx - self.prediction_days
+        train_mask = starts < train_end
         val_mask   = starts >= split_idx
         X_tr, X_val = X[train_mask], X[val_mask]
         y_tr, y_val = y[train_mask], y[val_mask]
         base_val    = base_prices[val_mask]
-        if len(X_tr) == 0 or len(X_val) == 0:
+        if len(X_tr) < 60:
+            raise ValueError("purge 后训练集少于 60 条，无法训练 LSTM 模型")
+        if len(X_val) == 0:
             raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
         print(f"MLP训练集：{X_tr.shape}，验证集：{X_val.shape}")

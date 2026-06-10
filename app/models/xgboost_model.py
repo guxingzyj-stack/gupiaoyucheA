@@ -347,12 +347,19 @@ class XGBoostPredictor:
             raise ValueError("特征数据不足，无法训练XGBoost模型")
         
         self.feature_cols = feat_df.columns.tolist()
-        X = self.scaler.fit_transform(feat_df.values)
+        X_raw = feat_df.values
         y = target.values
         
-        split   = int(len(X) * 0.85)
-        X_train, X_val = X[:split], X[split:]
-        y_train, y_val = y[:split], y[split:]
+        split     = int(len(X_raw) * 0.85)
+        train_end = split - self.prediction_days
+        if train_end < 60:
+            raise ValueError("purge 后训练集少于 60 条，无法训练 XGBoost 模型")
+        if split >= len(X_raw):
+            raise ValueError("验证集为空，无法训练 XGBoost 模型")
+
+        X_train = self.scaler.fit_transform(X_raw[:train_end])
+        X_val   = self.scaler.transform(X_raw[split:])
+        y_train, y_val = y[:train_end], y[split:]
         
         # ── 使用贝叶斯优化或默认参数 ─────────────────────
         if self.use_bayes and BAYES_AVAILABLE:
@@ -392,7 +399,7 @@ class XGBoostPredictor:
         
         pred_ret_val = self.model.predict(X_val)
         # 将收益率预测还原为价格，计算RMSE
-        close_val   = df["close"].reindex(feat_df.index)[mask][split:]
+        close_val   = df["close"].reindex(feat_df.index).iloc[split:]
         pred_price  = close_val.values * (1 + pred_ret_val)
         true_price  = close_val.values * (1 + y_val)
         self.val_rmse   = float(np.sqrt(mean_squared_error(true_price, pred_price)))
