@@ -26,10 +26,6 @@ schedule>=1.2.0
 # 贝叶斯优化（XGBoost超参数优化）
 scikit-optimize>=0.9.0
 
-# 情感分析（轻量，快速模式必须）
-torch>=2.8.0
-transformers>=4.53.0
-
 # ── 可选：完整模式（Python ≤ 3.12）─────────────────────────
 # LSTM 长期预测需要 tensorflow
 # tensorflow>=2.13.0
