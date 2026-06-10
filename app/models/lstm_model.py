@@ -163,35 +163,59 @@ class LSTMPredictor:
                 data[:, i] = 0.0
         return data
 
-    def _make_sequences_keras(self, data: np.ndarray, close_idx: int):
+    def _make_sequences_keras(self, data: np.ndarray, close_idx: int, close_values: np.ndarray):
         """创建Keras LSTM训练序列"""
-        X, y, starts = [], [], []
+        X, y, starts, bases = [], [], [], []
         for i in range(self.lookback, len(data) - self.prediction_days + 1):
+            base_price = close_values[i - 1]
+            future_prices = close_values[i: i + self.prediction_days]
+            if not np.isfinite(base_price) or base_price <= 0 or np.any(~np.isfinite(future_prices)):
+                continue
             X.append(data[i - self.lookback: i])
-            y.append(data[i: i + self.prediction_days, close_idx])
+            y.append(np.clip(future_prices / base_price - 1.0, -0.8, 3.0))
             starts.append(i)
+            bases.append(base_price)
         return (
             np.array(X, dtype=np.float32),
             np.array(y, dtype=np.float32),
             np.array(starts, dtype=np.int32),
+            np.array(bases, dtype=np.float32),
         )
 
-    def _make_sequences_mlp(self, data: np.ndarray, close_idx: int):
+    def _make_sequences_mlp(self, data: np.ndarray, close_idx: int, close_values: np.ndarray):
         """展平时序窗口为 MLP 特征向量（过滤含NaN的行）"""
-        X, y, starts = [], [], []
+        X, y, starts, bases = [], [], [], []
         for i in range(self.lookback, len(data) - self.prediction_days + 1):
+            base_price = close_values[i - 1]
+            future_prices = close_values[i: i + self.prediction_days]
+            if not np.isfinite(base_price) or base_price <= 0 or np.any(~np.isfinite(future_prices)):
+                continue
             x_win = data[i - self.lookback: i].flatten()
-            y_win = data[i: i + self.prediction_days, close_idx]
+            y_win = np.clip(future_prices / base_price - 1.0, -0.8, 3.0)
             if np.any(np.isnan(x_win)) or np.any(np.isnan(y_win)):
                 continue
             X.append(x_win)
             y.append(y_win)
             starts.append(i)
+            bases.append(base_price)
         return (
             np.array(X, dtype=np.float32),
             np.array(y, dtype=np.float32),
             np.array(starts, dtype=np.int32),
+            np.array(bases, dtype=np.float32),
         )
+
+    def _price_rmse_from_returns(self, pred_ret, true_ret, base_prices) -> float:
+        pred_ret = np.asarray(pred_ret, dtype=np.float32)
+        true_ret = np.asarray(true_ret, dtype=np.float32)
+        if pred_ret.ndim == 1:
+            pred_ret = pred_ret.reshape(-1, 1)
+        if true_ret.ndim == 1:
+            true_ret = true_ret.reshape(-1, 1)
+        horizon = min(self.prediction_days, pred_ret.shape[1], true_ret.shape[1]) - 1
+        pred_price = base_prices * (1.0 + pred_ret[:, horizon])
+        true_price = base_prices * (1.0 + true_ret[:, horizon])
+        return float(np.sqrt(mean_squared_error(true_price, pred_price)))
 
     # ── Keras LSTM 模型（支持双向LSTM和Attention）────────────────────
     def _build_keras(self, n_features: int):
@@ -253,18 +277,19 @@ class LSTMPredictor:
         self._scale(df.iloc[:split_idx], fit=True)
         data               = self._scale(df, fit=False)
         close_idx          = self.feature_names.index("close")
+        close_values       = df["close"].values.astype(np.float32)
         
         print(f"LSTM训练：使用{self.n_features}个特征，数据形状={data.shape}")
         print(f"  双向LSTM：{self.use_bidirectional}，Attention：{self.use_attention}")
 
         if self.backend == "keras":
-            return self._train_keras(data, close_idx, split_idx)
+            return self._train_keras(data, close_idx, split_idx, close_values)
         else:
-            return self._train_mlp(data, close_idx, split_idx)
+            return self._train_mlp(data, close_idx, split_idx, close_values)
 
-    def _train_keras(self, data, close_idx, split_idx) -> float:
+    def _train_keras(self, data, close_idx, split_idx, close_values) -> float:
         """训练Keras LSTM模型"""
-        X, y, starts = self._make_sequences_keras(data, close_idx)
+        X, y, starts, base_prices = self._make_sequences_keras(data, close_idx, close_values)
         
         if len(X) == 0:
             raise ValueError("数据不足，无法创建训练序列")
@@ -273,6 +298,7 @@ class LSTMPredictor:
         val_mask   = starts >= split_idx
         X_tr, X_val = X[train_mask], X[val_mask]
         y_tr, y_val = y[train_mask], y[val_mask]
+        base_val    = base_prices[val_mask]
         if len(X_tr) == 0 or len(X_val) == 0:
             raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
@@ -294,24 +320,22 @@ class LSTMPredictor:
         
         # 计算验证集RMSE
         pred      = self.model.predict(X_val, verbose=0)
-        sc        = self.scalers["close"]
-        pred_real = sc.inverse_transform(pred[:, 0].reshape(-1, 1)).flatten()
-        true_real = sc.inverse_transform(y_val[:, 0].reshape(-1, 1)).flatten()
-        self.val_rmse   = float(np.sqrt(mean_squared_error(true_real, pred_real)))
+        self.val_rmse   = self._price_rmse_from_returns(pred, y_val, base_val)
         self.is_trained = True
         
         print(f"Keras LSTM训练完成！验证集RMSE: {self.val_rmse:.4f}")
         return self.val_rmse
 
-    def _train_mlp(self, data, close_idx, split_idx) -> float:
+    def _train_mlp(self, data, close_idx, split_idx, close_values) -> float:
         """训练MLP模型（降级方案）"""
-        X, y, starts = self._make_sequences_mlp(data, close_idx)
+        X, y, starts, base_prices = self._make_sequences_mlp(data, close_idx, close_values)
         if len(X) < 30:
             raise ValueError("训练数据不足")
         train_mask = starts < split_idx
         val_mask   = starts >= split_idx
         X_tr, X_val = X[train_mask], X[val_mask]
         y_tr, y_val = y[train_mask], y[val_mask]
+        base_val    = base_prices[val_mask]
         if len(X_tr) == 0 or len(X_val) == 0:
             raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
@@ -344,10 +368,7 @@ class LSTMPredictor:
             self.model.fit(X_tr, y_tr)
             pred_val = self.model.predict(X_val)
         
-        sc        = self.scalers["close"]
-        pred_real = sc.inverse_transform(pred_val[:, 0].reshape(-1, 1)).flatten()
-        true_real = sc.inverse_transform(y_val[:, 0].reshape(-1, 1)).flatten()
-        self.val_rmse   = float(np.sqrt(mean_squared_error(true_real, pred_real)))
+        self.val_rmse   = self._price_rmse_from_returns(pred_val, y_val, base_val)
         self.is_trained = True
         
         print(f"MLP训练完成！验证集RMSE: {self.val_rmse:.4f}")
@@ -365,7 +386,6 @@ class LSTMPredictor:
             raise RuntimeError("模型尚未训练")
 
         data = self._scale(df, fit=False)
-        sc   = self.scalers["close"]
         
         if self.backend == "keras":
             seq  = data[-self.lookback:].reshape(1, self.lookback, -1)
@@ -376,11 +396,9 @@ class LSTMPredictor:
             if np.isscalar(raw):
                 raw = np.array([raw] * self.prediction_days)
         
-        prices     = sc.inverse_transform(
-            np.array(raw).flatten()[:self.prediction_days].reshape(-1, 1)
-        ).flatten()
-        
         last_price = float(df["close"].iloc[-1])
+        returns    = np.clip(np.array(raw).flatten()[:self.prediction_days], -0.8, 3.0)
+        prices     = last_price * (1.0 + returns)
         last_date  = df.index[-1]
         margin     = self.val_rmse * 1.5
         dates      = pd.date_range(
