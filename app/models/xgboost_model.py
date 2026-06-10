@@ -350,21 +350,30 @@ class XGBoostPredictor:
         X_raw = feat_df.values
         y = target.values
         
-        split     = int(len(X_raw) * 0.85)
-        train_end = split - self.prediction_days
+        train_boundary = int(len(X_raw) * 0.70)
+        holdout_start  = int(len(X_raw) * 0.85)
+        train_end      = train_boundary - self.prediction_days
+        early_end      = holdout_start - self.prediction_days
         if train_end < 60:
             raise ValueError("purge 后训练集少于 60 条，无法训练 XGBoost 模型")
-        if split >= len(X_raw):
-            raise ValueError("验证集为空，无法训练 XGBoost 模型")
+        if early_end <= train_boundary:
+            raise ValueError("早停集为空，无法训练 XGBoost 模型")
+        if holdout_start >= len(X_raw):
+            raise ValueError("holdout 评估集为空，无法训练 XGBoost 模型")
 
         X_train = self.scaler.fit_transform(X_raw[:train_end])
-        X_val   = self.scaler.transform(X_raw[split:])
-        y_train, y_val = y[:train_end], y[split:]
+        X_early = self.scaler.transform(X_raw[train_boundary:early_end])
+        X_holdout = self.scaler.transform(X_raw[holdout_start:])
+        y_train = y[:train_end]
+        y_early = y[train_boundary:early_end]
+        y_holdout = y[holdout_start:]
         
         # ── 使用贝叶斯优化或默认参数 ─────────────────────
         if self.use_bayes and BAYES_AVAILABLE:
             print("正在使用贝叶斯优化搜索最优超参数...")
-            self.best_params = optimize_xgboost(X_train, y_train)
+            X_bayes = self.scaler.transform(X_raw[:early_end])
+            y_bayes = y[:early_end]
+            self.best_params = optimize_xgboost(X_bayes, y_bayes)
             
             # 使用优化后的参数训练最终模型
             self.model = XGBRegressor(
@@ -395,13 +404,13 @@ class XGBoostPredictor:
             )
         
         # 修复：正确的语法
-        self.model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+        self.model.fit(X_train, y_train, eval_set=[(X_early, y_early)], verbose=False)
         
-        pred_ret_val = self.model.predict(X_val)
+        pred_ret_val = self.model.predict(X_holdout)
         # 将收益率预测还原为价格，计算RMSE
-        close_val   = df["close"].reindex(feat_df.index).iloc[split:]
+        close_val   = df["close"].reindex(feat_df.index).iloc[holdout_start:]
         pred_price  = close_val.values * (1 + pred_ret_val)
-        true_price  = close_val.values * (1 + y_val)
+        true_price  = close_val.values * (1 + y_holdout)
         self.val_rmse   = float(np.sqrt(mean_squared_error(true_price, pred_price)))
         self.is_trained = True
         
