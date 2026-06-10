@@ -165,15 +165,20 @@ class LSTMPredictor:
 
     def _make_sequences_keras(self, data: np.ndarray, close_idx: int):
         """创建Keras LSTM训练序列"""
-        X, y = [], []
+        X, y, starts = [], [], []
         for i in range(self.lookback, len(data) - self.prediction_days + 1):
             X.append(data[i - self.lookback: i])
             y.append(data[i: i + self.prediction_days, close_idx])
-        return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+            starts.append(i)
+        return (
+            np.array(X, dtype=np.float32),
+            np.array(y, dtype=np.float32),
+            np.array(starts, dtype=np.int32),
+        )
 
     def _make_sequences_mlp(self, data: np.ndarray, close_idx: int):
         """展平时序窗口为 MLP 特征向量（过滤含NaN的行）"""
-        X, y = [], []
+        X, y, starts = [], [], []
         for i in range(self.lookback, len(data) - self.prediction_days + 1):
             x_win = data[i - self.lookback: i].flatten()
             y_win = data[i: i + self.prediction_days, close_idx]
@@ -181,7 +186,12 @@ class LSTMPredictor:
                 continue
             X.append(x_win)
             y.append(y_win)
-        return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+            starts.append(i)
+        return (
+            np.array(X, dtype=np.float32),
+            np.array(y, dtype=np.float32),
+            np.array(starts, dtype=np.int32),
+        )
 
     # ── Keras LSTM 模型（支持双向LSTM和Attention）────────────────────
     def _build_keras(self, n_features: int):
@@ -237,27 +247,34 @@ class LSTMPredictor:
         """
         self.feature_names = self._get_features(df)
         self.n_features   = len(self.feature_names)
-        data               = self._scale(df, fit=True)
+        split_idx          = int(len(df) * 0.85)
+        if split_idx <= self.lookback or split_idx >= len(df):
+            raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
+        self._scale(df.iloc[:split_idx], fit=True)
+        data               = self._scale(df, fit=False)
         close_idx          = self.feature_names.index("close")
         
         print(f"LSTM训练：使用{self.n_features}个特征，数据形状={data.shape}")
         print(f"  双向LSTM：{self.use_bidirectional}，Attention：{self.use_attention}")
 
         if self.backend == "keras":
-            return self._train_keras(data, close_idx)
+            return self._train_keras(data, close_idx, split_idx)
         else:
-            return self._train_mlp(data, close_idx)
+            return self._train_mlp(data, close_idx, split_idx)
 
-    def _train_keras(self, data, close_idx) -> float:
+    def _train_keras(self, data, close_idx, split_idx) -> float:
         """训练Keras LSTM模型"""
-        X, y    = self._make_sequences_keras(data, close_idx)
+        X, y, starts = self._make_sequences_keras(data, close_idx)
         
         if len(X) == 0:
             raise ValueError("数据不足，无法创建训练序列")
         
-        split   = int(len(X) * 0.85)
-        X_tr, X_val = X[:split], X[split:]
-        y_tr, y_val = y[:split], y[split:]
+        train_mask = starts < split_idx
+        val_mask   = starts >= split_idx
+        X_tr, X_val = X[train_mask], X[val_mask]
+        y_tr, y_val = y[train_mask], y[val_mask]
+        if len(X_tr) == 0 or len(X_val) == 0:
+            raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
         print(f"Keras训练集：{X_tr.shape}，验证集：{X_val.shape}")
 
@@ -286,14 +303,17 @@ class LSTMPredictor:
         print(f"Keras LSTM训练完成！验证集RMSE: {self.val_rmse:.4f}")
         return self.val_rmse
 
-    def _train_mlp(self, data, close_idx) -> float:
+    def _train_mlp(self, data, close_idx, split_idx) -> float:
         """训练MLP模型（降级方案）"""
-        X, y    = self._make_sequences_mlp(data, close_idx)
+        X, y, starts = self._make_sequences_mlp(data, close_idx)
         if len(X) < 30:
             raise ValueError("训练数据不足")
-        split   = int(len(X) * 0.85)
-        X_tr, X_val = X[:split], X[split:]
-        y_tr, y_val = y[:split], y[split:]
+        train_mask = starts < split_idx
+        val_mask   = starts >= split_idx
+        X_tr, X_val = X[train_mask], X[val_mask]
+        y_tr, y_val = y[train_mask], y[val_mask]
+        if len(X_tr) == 0 or len(X_val) == 0:
+            raise ValueError("训练数据不足，无法按时间切分训练集和验证集")
         
         print(f"MLP训练集：{X_tr.shape}，验证集：{X_val.shape}")
 
