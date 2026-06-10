@@ -1,0 +1,37 @@
+# Local runtime
+python/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# App runtime data
+app/.cache/
+app/history/
+app/output/
+app/performance_logs/
+app/prediction_logs/
+app/scheduler/
+app/backtest_logs/
+app/online_models/
+app/watchlist.json
+
+# Build artifacts and snapshots
+installer/*.exe
+installer/Output/
+版本快照/
+*.zip
+*.7z
+*.rar
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.bak2
+*.old
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
