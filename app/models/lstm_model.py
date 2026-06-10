@@ -119,6 +119,7 @@ class LSTMPredictor:
         self.val_rmse        = float("inf")
         self.backend         = "keras" if TF_AVAILABLE else "mlp"
         self.n_features      = 0
+        self.target_kind     = "return"
         
         if self.use_attention and not TF_AVAILABLE:
             print("⚠️ Attention机制需要TensorFlow，已自动禁用")
@@ -446,6 +447,12 @@ class LSTMPredictor:
         arch = state.pop("_keras_architecture", None)
         weights = state.pop("_keras_weights", None)
         self.__dict__.update(state)
+        if self.__dict__.get("target_kind") != "return":
+            self.model = None
+            self.is_trained = False
+            self.target_kind = "return"
+            print("LSTM 模型为旧目标口径（价格），已失效，将触发重训")
+            return
         if arch is not None and weights is not None and self.backend == "keras":
             try:
                 if not TF_AVAILABLE:
