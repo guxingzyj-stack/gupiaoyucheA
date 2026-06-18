@@ -186,6 +186,19 @@ def test_bank_branch_uses_pb_roe():
     assert any(item["code"] == "R4" and item["severity"] == "info" for item in result["cautions"])
 
 
+def test_bank_moat_uses_neutral_score():
+    result = evaluate_value(
+        "600036",
+        base_stock(industry="银行"),
+        base_fundamental(industry="银行", pb=0.8, roe=10),
+        base_metrics(gross_margin=None),
+    )
+
+    q3 = result["quality"]["dimensions"]["Q3_moat"]
+    assert q3["score"] == 1
+    assert q3["why"] == "银行护城河口径不同，按中性处理"
+
+
 def test_low_cashflow_scores_zero():
     result = evaluate_value(
         "000004",
@@ -288,6 +301,27 @@ def test_gross_margin_fallback_from_abstract_revenue_cost():
     assert metrics["source_columns"]["gross_margin"] == "stock_financial_abstract:(营业总收入-营业成本)/营业总收入"
 
 
+def test_bank_risk_metrics_from_abstract_feed_q5():
+    metrics = {"source_columns": {}, "errors": []}
+    abstract_df = pd.DataFrame({
+        "指标": ["不良贷款率", "拨备覆盖率", "资本充足率"],
+        "2025": [1.2, 220, 13],
+    })
+
+    _fill_quality_from_abstract(metrics, abstract_df)
+    result = evaluate_value(
+        "600036",
+        base_stock(industry="银行"),
+        base_fundamental(industry="银行", pb=0.8, roe=10),
+        base_metrics(**metrics),
+    )
+
+    assert metrics["npl_ratio"] == 1.2
+    assert metrics["provision_coverage"] == 220
+    assert metrics["capital_adequacy"] == 13
+    assert result["quality"]["dimensions"]["Q5_balance"]["score"] == 2
+
+
 def test_compute_percentile_filters_invalid_values():
     percentile = _compute_percentile([-1, 0, 1, 3, 5, None], 3)
     assert round(percentile, 2) == 66.67
@@ -361,6 +395,8 @@ def run_all():
     test_fetch_financial_indicators_uses_shared_growth_columns()
     test_stock_info_industry_fallback_from_individual_info()
     test_gross_margin_fallback_from_abstract_revenue_cost()
+    test_bank_moat_uses_neutral_score()
+    test_bank_risk_metrics_from_abstract_feed_q5()
     test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()

@@ -61,9 +61,9 @@ def evaluate_value(
         "pe_percentile": _pick_num("pe_percentile", quality_metrics, fundamental),
         "pb_percentile": _pick_num("pb_percentile", quality_metrics, fundamental),
         "dividend_yield": _pick_num("dividend_yield", fundamental, stock_info, quality_metrics),
-        "npl_ratio": _pick_num("npl_ratio", quality_metrics, fundamental),
-        "provision_coverage": _pick_num("provision_coverage", quality_metrics, fundamental),
-        "capital_adequacy": _pick_num("capital_adequacy", quality_metrics, fundamental),
+        "npl_ratio": _pick_num("npl_ratio", quality_metrics, fundamental, stock_info),
+        "provision_coverage": _pick_num("provision_coverage", quality_metrics, fundamental, stock_info),
+        "capital_adequacy": _pick_num("capital_adequacy", quality_metrics, fundamental, stock_info),
         "top_customer_ratio": _pick_num("top_customer_ratio", quality_metrics, fundamental),
         "top_customer_risk": bool(quality_metrics.get("top_customer_risk") or fundamental.get("top_customer_risk")),
     }
@@ -114,7 +114,7 @@ def _score_quality(data: dict, industry_kind: str, red_flags: list[dict]) -> dic
     dimensions = {
         "Q1_roe": _score_roe(data),
         "Q2_cashflow": _score_cashflow(data, industry_kind),
-        "Q3_moat": _score_moat(data),
+        "Q3_moat": _score_moat(data, industry_kind),
         "Q4_growth": _score_growth(data),
         "Q5_balance": _score_balance(data, industry_kind),
     }
@@ -243,7 +243,9 @@ def _score_cashflow(data: dict, industry_kind: str) -> dict:
     return {"score": 0, "why": f"现金流覆盖净利润 {ratio:.2f}，偏弱"}
 
 
-def _score_moat(data: dict) -> dict:
+def _score_moat(data: dict, industry_kind: str) -> dict:
+    if industry_kind == "bank":
+        return {"score": 1, "why": "银行护城河口径不同，按中性处理"}
     gross_margin = data.get("gross_margin")
     series = _valid_series(data.get("gross_margin_series"))
     if gross_margin is None:

@@ -239,6 +239,10 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     revenue = _latest_abstract_value(df, ("营业总收入", "营业收入"))
     gross_margin = _latest_abstract_value(df, ("销售毛利率", "毛利率"))
     cost = _latest_abstract_value(df, ("营业成本",))
+    npl_ratio = _latest_abstract_value(df, ("不良贷款率", "不良率"))
+    provision_coverage = _latest_abstract_value(df, ("拨备覆盖率",))
+    capital_adequacy = _latest_abstract_value(df, ("资本充足率",))
+    net_interest_margin = _latest_abstract_value(df, ("净息差",))
 
     if parent is not None:
         metrics["parent_net_profit_abstract"] = parent
@@ -259,6 +263,18 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
         metrics["gross_margin"] = (revenue - cost) / revenue * 100
         metrics["gross_margin_series"] = [metrics["gross_margin"]]
         metrics["source_columns"]["gross_margin"] = "stock_financial_abstract:(营业总收入-营业成本)/营业总收入"
+    if metrics.get("npl_ratio") is None and npl_ratio is not None:
+        metrics["npl_ratio"] = npl_ratio
+        metrics["source_columns"]["npl_ratio"] = "stock_financial_abstract:不良贷款率/不良率"
+    if metrics.get("provision_coverage") is None and provision_coverage is not None:
+        metrics["provision_coverage"] = provision_coverage
+        metrics["source_columns"]["provision_coverage"] = "stock_financial_abstract:拨备覆盖率"
+    if metrics.get("capital_adequacy") is None and capital_adequacy is not None:
+        metrics["capital_adequacy"] = capital_adequacy
+        metrics["source_columns"]["capital_adequacy"] = "stock_financial_abstract:资本充足率"
+    if metrics.get("net_interest_margin") is None and net_interest_margin is not None:
+        metrics["net_interest_margin"] = net_interest_margin
+        metrics["source_columns"]["net_interest_margin"] = "stock_financial_abstract:净息差"
 
 
 def _refresh_deducted_profit_ratio(metrics: dict) -> None:
