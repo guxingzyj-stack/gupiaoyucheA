@@ -13,6 +13,7 @@ import data.fetcher as fetcher
 from data.fetcher import _fill_industry_fallback
 from analysis.fundamental import (
     _compute_percentile,
+    _fetch_dividend_yield_fallback,
     _fetch_financial_indicators,
     _fill_normalized_pe,
     _fill_quality_from_abstract,
@@ -298,6 +299,51 @@ def test_cashflow_uses_annual_ratio_without_percent_division():
     assert metrics["cashflow_to_profit"] == 1.2
     assert metrics["cashflow_to_profit_series"] == [1.2, 0.9]
     assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 2
+
+
+def test_dividend_yield_fallback_from_baidu_valuation():
+    metrics = {"source_columns": {}, "errors": []}
+    fake_ak = types.SimpleNamespace(
+        stock_zh_valuation_baidu=lambda symbol, indicator, period: pd.DataFrame({
+            "date": ["2024-12-31", "2025-12-31"],
+            "value": [2.6, 3.2],
+        })
+    )
+
+    _fetch_dividend_yield_fallback(metrics, "000333", fake_ak)
+    result = evaluate_value(
+        "000333",
+        base_stock(),
+        base_fundamental(dividend_yield=None),
+        base_metrics(dividend_yield=metrics["dividend_yield"]),
+    )
+
+    assert metrics["dividend_yield"] == 3.2
+    assert metrics["source_columns"]["dividend_yield"] == "stock_zh_valuation_baidu:股息率:value"
+    assert result["valuation"]["dimensions"]["V3_yield"]["score"] == 1
+
+
+def test_dividend_yield_fallback_from_fhps_ratio_column():
+    metrics = {"source_columns": {}, "errors": []}
+    fake_ak = types.SimpleNamespace(
+        stock_zh_valuation_baidu=lambda symbol, indicator, period: (_ for _ in ()).throw(RuntimeError("baidu down")),
+        stock_fhps_detail_em=lambda symbol: pd.DataFrame({
+            "报告期": ["2024-12-31", "2025-12-31"],
+            "现金分红-股息率": [0.026, 0.045],
+        }),
+    )
+
+    _fetch_dividend_yield_fallback(metrics, "000333", fake_ak)
+    result = evaluate_value(
+        "000333",
+        base_stock(),
+        base_fundamental(dividend_yield=None),
+        base_metrics(dividend_yield=metrics["dividend_yield"]),
+    )
+
+    assert metrics["dividend_yield"] == 4.5
+    assert metrics["source_columns"]["dividend_yield"] == "stock_fhps_detail_em:现金分红-股息率"
+    assert result["valuation"]["dimensions"]["V3_yield"]["score"] == 2
 
 
 def test_fetch_financial_indicators_uses_shared_growth_columns():
@@ -598,6 +644,8 @@ def run_all():
     test_roe_without_history_cannot_score_full()
     test_roe_uses_annual_series_for_quality_score()
     test_cashflow_uses_annual_ratio_without_percent_division()
+    test_dividend_yield_fallback_from_baidu_valuation()
+    test_dividend_yield_fallback_from_fhps_ratio_column()
     test_fetch_financial_indicators_uses_shared_growth_columns()
     test_stock_info_industry_fallback_from_individual_info()
     test_industry_fallback_uses_persistent_cache_when_live_empty()

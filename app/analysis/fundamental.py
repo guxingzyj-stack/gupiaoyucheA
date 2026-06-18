@@ -148,6 +148,7 @@ def fetch_quality_metrics(symbol: str) -> dict:
         "debt_ratio": None,
         "pe_percentile": None,
         "pb_percentile": None,
+        "dividend_yield": None,
         "pe": None,
         "normalized_factor": None,
         "normalized_pe": None,
@@ -186,6 +187,7 @@ def fetch_quality_metrics(symbol: str) -> dict:
         metrics["errors"].append(f"财务摘要获取失败: {exc}")
 
     _fetch_valuation_percentiles(metrics, symbol, ak)
+    _fetch_dividend_yield_fallback(metrics, symbol, ak)
     _fill_normalized_pe(metrics)
     _mark_missing_quality_fields(metrics)
     return metrics
@@ -412,6 +414,75 @@ def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
         _fill_percentile_from_series(metrics, field, df[value_col], f"stock_zh_valuation_baidu:{indicator}:{value_col}")
         updated = metrics.get(field) is not None or updated
     return updated
+
+
+def _fetch_dividend_yield_fallback(metrics: dict, symbol: str, ak) -> None:
+    if metrics.get("dividend_yield") is not None:
+        return
+    if _try_baidu_dividend_yield(metrics, symbol, ak):
+        return
+    _try_fhps_dividend_yield(metrics, symbol, ak)
+
+
+def _try_baidu_dividend_yield(metrics: dict, symbol: str, ak) -> bool:
+    fn = getattr(ak, "stock_zh_valuation_baidu", None)
+    if fn is None:
+        return False
+    try:
+        df = fn(symbol=symbol, indicator="股息率", period=VALUATION_PERIOD)
+    except Exception:
+        return False
+    if df is None or df.empty:
+        return False
+    value_col = _find_column(df, candidates=("value", "Value", "股息率", "估值"), keywords=("股息率",))
+    if not value_col:
+        return False
+    value = _last_notna(_numeric_series(df[value_col]))
+    if value is None:
+        return False
+    metrics["dividend_yield"] = _dividend_yield_to_percent(value)
+    metrics["source_columns"]["dividend_yield"] = f"stock_zh_valuation_baidu:股息率:{value_col}"
+    return True
+
+
+def _try_fhps_dividend_yield(metrics: dict, symbol: str, ak) -> bool:
+    fn = getattr(ak, "stock_fhps_detail_em", None)
+    if fn is None:
+        return False
+    try:
+        df = fn(symbol=symbol)
+    except Exception:
+        return False
+    if df is None or df.empty:
+        return False
+    value_col = _find_column(df, candidates=("现金分红-股息率", "股息率"), keywords=("股息率",))
+    if not value_col:
+        return False
+    df = _sort_dividend_rows_latest_first(df)
+    value = _latest_notna(_numeric_series(df[value_col]))
+    if value is None:
+        return False
+    metrics["dividend_yield"] = _dividend_yield_to_percent(value)
+    metrics["source_columns"]["dividend_yield"] = f"stock_fhps_detail_em:{value_col}"
+    return True
+
+
+def _sort_dividend_rows_latest_first(df: pd.DataFrame) -> pd.DataFrame:
+    date_col = _find_column(df, candidates=("报告期", "最新公告日期", "除权除息日", "股权登记日"))
+    if not date_col:
+        return df
+    result = df.copy()
+    result["_dividend_date"] = pd.to_datetime(result[date_col], errors="coerce")
+    if result["_dividend_date"].dropna().empty:
+        return df
+    return result.sort_values("_dividend_date", ascending=False).drop(columns=["_dividend_date"])
+
+
+def _dividend_yield_to_percent(value: float) -> float:
+    value = float(value)
+    if 0 < abs(value) <= 1:
+        return value * 100
+    return value
 
 
 def _fill_percentile_from_series(metrics: dict, field: str, series, source: str) -> None:
