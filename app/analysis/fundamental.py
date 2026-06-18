@@ -8,6 +8,8 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+VALUATION_PERIOD = "近十年"
+
 
 def fetch_and_analyze(symbol: str, stock_info: dict) -> dict:
     """
@@ -170,6 +172,7 @@ def fetch_quality_metrics(symbol: str) -> dict:
     except Exception as exc:
         metrics["errors"].append(f"财务摘要获取失败: {exc}")
 
+    _fetch_valuation_percentiles(metrics, symbol, ak)
     _mark_missing_quality_fields(metrics)
     return metrics
 
@@ -279,6 +282,141 @@ def _refresh_deducted_profit_ratio(metrics: dict) -> None:
     )
 
 
+def _fetch_valuation_percentiles(metrics: dict, symbol: str, ak) -> None:
+    try:
+        if _try_lg_valuation_percentiles(metrics, symbol, ak):
+            _mark_missing_valuation_fields(metrics)
+            return
+    except Exception as exc:
+        metrics["errors"].append(f"乐咕历史估值获取失败: {exc}")
+
+    try:
+        if _try_baidu_valuation_percentiles(metrics, symbol, ak):
+            _mark_missing_valuation_fields(metrics)
+            return
+    except Exception as exc:
+        metrics["errors"].append(f"百度历史估值获取失败: {exc}")
+
+    _mark_missing_valuation_fields(metrics)
+
+
+def _try_lg_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
+    fn = getattr(ak, "stock_a_indicator_lg", None)
+    if fn is None:
+        return False
+
+    for candidate in _symbol_candidates(symbol):
+        try:
+            df = fn(symbol=candidate)
+        except Exception as exc:
+            metrics["errors"].append(f"stock_a_indicator_lg({candidate})失败: {exc}")
+            continue
+        if df is None or df.empty:
+            continue
+        df = _recent_valuation_window(df)
+        pe_col = _find_column(df, candidates=("pe_ttm", "PE_TTM", "pe", "PE"))
+        pb_col = _find_column(df, candidates=("pb", "PB"))
+        updated = False
+        if pe_col:
+            _fill_percentile_from_series(metrics, "pe_percentile", df[pe_col], f"stock_a_indicator_lg:{pe_col}")
+            updated = metrics.get("pe_percentile") is not None or updated
+        if pb_col:
+            _fill_percentile_from_series(metrics, "pb_percentile", df[pb_col], f"stock_a_indicator_lg:{pb_col}")
+            updated = metrics.get("pb_percentile") is not None or updated
+        if updated:
+            return True
+    return False
+
+
+def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
+    fn = getattr(ak, "stock_zh_valuation_baidu", None)
+    if fn is None:
+        metrics["errors"].append("当前AKShare无stock_zh_valuation_baidu接口，历史估值缺失")
+        return False
+
+    specs = (
+        ("pe_percentile", "市盈率(TTM)"),
+        ("pb_percentile", "市净率"),
+    )
+    updated = False
+    for field, indicator in specs:
+        if metrics.get(field) is not None:
+            updated = True
+            continue
+        try:
+            df = fn(symbol=symbol, indicator=indicator, period=VALUATION_PERIOD)
+        except Exception as exc:
+            metrics["errors"].append(f"百度{indicator}估值获取失败: {exc}")
+            continue
+        if df is None or df.empty:
+            metrics["errors"].append(f"百度{indicator}估值返回为空")
+            continue
+        value_col = _find_column(df, candidates=("value", "Value", "估值"))
+        if not value_col:
+            metrics["errors"].append(f"百度{indicator}估值缺少value列")
+            continue
+        _fill_percentile_from_series(metrics, field, df[value_col], f"stock_zh_valuation_baidu:{indicator}:{value_col}")
+        updated = metrics.get(field) is not None or updated
+    return updated
+
+
+def _fill_percentile_from_series(metrics: dict, field: str, series, source: str) -> None:
+    values = _positive_numeric_series(series)
+    current = _last_notna(values)
+    percentile = _compute_percentile(values, current)
+    metrics["source_columns"][field] = source
+    if percentile is None:
+        return
+    metrics[field] = percentile
+    if len(values) < 250:
+        label = "PE" if field == "pe_percentile" else "PB"
+        metrics["errors"].append(f"{label}历史估值样本不足: {len(values)}")
+
+
+def _compute_percentile(series, current) -> float | None:
+    values = _positive_numeric_series(series)
+    if values.empty:
+        return None
+    try:
+        current_value = float(current)
+    except Exception:
+        return None
+    if current_value <= 0 or np.isnan(current_value):
+        return None
+    return float((values <= current_value).mean() * 100.0)
+
+
+def _positive_numeric_series(series) -> pd.Series:
+    values = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+    return values[values > 0]
+
+
+def _recent_valuation_window(df: pd.DataFrame) -> pd.DataFrame:
+    date_col = _find_column(df, candidates=("trade_date", "date", "日期"))
+    if not date_col:
+        return df
+    dates = pd.to_datetime(df[date_col], errors="coerce")
+    if dates.dropna().empty:
+        return df
+    end = dates.max()
+    start = end - pd.DateOffset(years=10)
+    result = df.loc[dates >= start].copy()
+    result["_valuation_date"] = dates.loc[result.index]
+    result = result.sort_values("_valuation_date")
+    return result.drop(columns=["_valuation_date"])
+
+
+def _symbol_candidates(symbol: str) -> tuple[str, ...]:
+    symbol = str(symbol)
+    prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
+    upper_prefix = prefix.upper()
+    return (
+        symbol,
+        f"{prefix}{symbol}",
+        f"{upper_prefix}{symbol}",
+    )
+
+
 def _find_column(df: pd.DataFrame, candidates=(), keywords=()) -> str | None:
     columns = [str(c) for c in df.columns]
     for col in candidates:
@@ -303,6 +441,13 @@ def _latest_notna(series: pd.Series) -> float | None:
     if series.empty:
         return None
     return float(series.iloc[0])
+
+
+def _last_notna(series: pd.Series) -> float | None:
+    series = series.dropna()
+    if series.empty:
+        return None
+    return float(series.iloc[-1])
 
 
 def _percent_to_ratio(value, is_percent: bool = False):
@@ -341,6 +486,16 @@ def _mark_missing_quality_fields(metrics: dict) -> None:
     }
     for field, label in required.items():
         if metrics.get(field) is None:
+            metrics["missing_fields"].append(label)
+
+
+def _mark_missing_valuation_fields(metrics: dict) -> None:
+    optional = {
+        "pe_percentile": "PE历史分位",
+        "pb_percentile": "PB历史分位",
+    }
+    for field, label in optional.items():
+        if metrics.get(field) is None and label not in metrics["missing_fields"]:
             metrics["missing_fields"].append(label)
 
 

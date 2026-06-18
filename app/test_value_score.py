@@ -10,6 +10,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from analysis.fundamental import (
+    _compute_percentile,
     _fetch_financial_indicators,
     _fill_quality_from_abstract,
     _fill_quality_from_indicator,
@@ -90,6 +91,28 @@ def test_value_trap_combo():
     assert all(flag["severity"] == "warn" for flag in result["red_flags"])
     assert result["combo"] == "便宜但存疑"
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 0
+
+
+def test_valuation_percentile_used_in_v1():
+    result = evaluate_value(
+        "000011",
+        base_stock(),
+        base_fundamental(pe=20),
+        base_metrics(pe_percentile=20),
+    )
+    assert result["valuation"]["dimensions"]["V1_history"]["score"] == 2
+    assert "历史分位" in result["valuation"]["dimensions"]["V1_history"]["why"]
+
+
+def test_missing_valuation_percentile_does_not_block_gate():
+    result = evaluate_value(
+        "000012",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(missing_fields=["PE历史分位", "PB历史分位"]),
+    )
+    assert result["gate"]["passed"] is True
+    assert any("历史 PE/PB 分位缺失" in item for item in result["open_questions"])
 
 
 def test_bank_branch_uses_pb_roe():
@@ -179,6 +202,13 @@ def test_fetch_financial_indicators_uses_shared_growth_columns():
     assert result["profit_growth"] == 8
 
 
+def test_compute_percentile_filters_invalid_values():
+    percentile = _compute_percentile([-1, 0, 1, 3, 5, None], 3)
+    assert round(percentile, 2) == 66.67
+    assert _compute_percentile([0, None, -1], 3) is None
+    assert _compute_percentile([1, 2, 3], 0) is None
+
+
 def test_deducted_profit_ratio_uses_indicator_and_abstract_fallback():
     metrics = {"source_columns": {}, "errors": []}
     indicator_df = pd.DataFrame({
@@ -233,11 +263,14 @@ def run_all():
     test_missing_gate()
     test_profit_up_revenue_down_red_flag()
     test_value_trap_combo()
+    test_valuation_percentile_used_in_v1()
+    test_missing_valuation_percentile_does_not_block_gate()
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
     test_roe_without_history_cannot_score_full()
     test_cashflow_percent_column_always_divides_by_100()
     test_fetch_financial_indicators_uses_shared_growth_columns()
+    test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()
     print("test_value_score passed")
