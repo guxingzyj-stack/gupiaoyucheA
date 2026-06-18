@@ -2,7 +2,7 @@ import os
 
 # ─── 语言设置 ───────────────────────────────────────────────
 LANGUAGE = "zh"  # zh=中文  en=English
-APP_VERSION = "v2.3.1"
+APP_VERSION = "v2.3.2"
 
 # ─── 路径 ──────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

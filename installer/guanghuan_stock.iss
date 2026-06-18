@@ -1,5 +1,5 @@
 #define MyAppName "光环智能股票预测系统"
-#define MyAppVersion "2.3.1"
+#define MyAppVersion "2.3.2"
 #define MyAppPublisher "光环智能"
 #define MyAppExeName "launch.bat"
 
