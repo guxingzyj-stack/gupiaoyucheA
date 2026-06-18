@@ -36,7 +36,8 @@ def evaluate_value(
     评估股票的长期价值属性。
 
     返回字段固定为 gate、industry_kind、quality、valuation、red_flags、
-    combo、open_questions、conflict_with_signal、details，供后续 UI 旁路展示。
+    cautions、combo、open_questions、conflict_with_signal、details，
+    供后续 UI 旁路展示。
     """
     quality_metrics = quality_metrics or {}
     industry = _pick("industry", stock_info, fundamental, quality_metrics) or "未知"
@@ -69,6 +70,7 @@ def evaluate_value(
 
     gate = _build_gate(data, industry_kind, quality_metrics)
     red_flags = _build_red_flags(data, industry_kind)
+    cautions = _build_cautions(industry_kind)
     quality = _score_quality(data, industry_kind, red_flags)
     valuation = _score_valuation(data, industry_kind, quality, red_flags)
     combo = _combine_judgement(gate, quality, valuation, red_flags)
@@ -80,6 +82,7 @@ def evaluate_value(
         "quality": quality,
         "valuation": valuation,
         "red_flags": red_flags,
+        "cautions": cautions,
         "combo": combo,
         "open_questions": open_questions,
         "conflict_with_signal": None,
@@ -160,6 +163,7 @@ def _build_red_flags(data: dict, industry_kind: str) -> list[dict]:
         flags.append({
             "code": "R1",
             "name": "增利不增收/扣非不足",
+            "severity": "warn",
             "effect": "质量降一档",
         })
 
@@ -167,6 +171,7 @@ def _build_red_flags(data: dict, industry_kind: str) -> list[dict]:
         flags.append({
             "code": "R2",
             "name": "低估值陷阱",
+            "severity": "warn",
             "effect": "便宜不计正面",
         })
 
@@ -176,16 +181,21 @@ def _build_red_flags(data: dict, industry_kind: str) -> list[dict]:
         flags.append({
             "code": "R3",
             "name": "客户集中",
+            "severity": "warn",
             "effect": "列为待核实风险",
         })
+    return flags
 
+
+def _build_cautions(industry_kind: str) -> list[dict]:
     if industry_kind in ("bank", "heavy_asset", "cyclical"):
-        flags.append({
+        return [{
             "code": "R4",
             "name": "行业特殊口径",
+            "severity": "info",
             "effect": "需结合行业专属指标",
-        })
-    return flags
+        }]
+    return []
 
 
 def _build_open_questions(data: dict, industry_kind: str, gate: dict, quality_metrics: dict) -> list[str]:

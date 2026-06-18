@@ -82,6 +82,7 @@ def test_value_trap_combo():
         base_metrics(revenue_growth=-5, profit_growth=-1),
     )
     assert any(flag["code"] == "R2" for flag in result["red_flags"])
+    assert all(flag["severity"] == "warn" for flag in result["red_flags"])
     assert result["combo"] == "便宜但存疑"
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 0
 
@@ -103,6 +104,8 @@ def test_bank_branch_uses_pb_roe():
     assert result["industry_kind"] == "bank"
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 2
     assert "PB" in result["valuation"]["dimensions"]["V1_history"]["why"]
+    assert not any(flag["code"] == "R4" for flag in result["red_flags"])
+    assert any(item["code"] == "R4" and item["severity"] == "info" for item in result["cautions"])
 
 
 def test_low_cashflow_scores_zero():
