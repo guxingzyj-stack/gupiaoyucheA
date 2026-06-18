@@ -2,7 +2,7 @@
 A股智能分析系统 — Streamlit Web界面
 启动: streamlit run app.py
 """
-import sys, os, json, warnings, subprocess
+import sys, os, json, warnings, subprocess, html
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -1190,6 +1190,191 @@ with col_right:
                             f'<div style="color:{color};font-size:2.7em;font-weight:800;line-height:1">{value}</div>'
                             f'{sub_html}</div>')
 
+                def _safe_text(value):
+                    if value in (None, ""):
+                        return "—"
+                    return html.escape(str(value))
+
+                def _score_badge_color(score, max_score):
+                    try:
+                        ratio = float(score) / max(1, float(max_score))
+                    except Exception:
+                        ratio = 0
+                    if ratio >= 0.75:
+                        return "#22c55e"
+                    if ratio >= 0.45:
+                        return "#d29922"
+                    return "#f85149"
+
+                def _value_flag_summary(value_assessment):
+                    warn_flags = [
+                        flag for flag in (value_assessment or {}).get("red_flags", [])
+                        if flag.get("severity") == "warn"
+                    ]
+                    parts = [
+                        f"{flag.get('code', '')} {flag.get('name', '')}".strip()
+                        for flag in warn_flags
+                    ]
+                    return "；".join([part for part in parts if part])
+
+                def _render_value_assessment_panel():
+                    value_assessment = r.get("value_assessment")
+                    if not value_assessment:
+                        return
+
+                    import pandas as pd
+
+                    gate = value_assessment.get("gate", {}) or {}
+                    quality = value_assessment.get("quality", {}) or {}
+                    valuation = value_assessment.get("valuation", {}) or {}
+                    details = value_assessment.get("details", {}) or {}
+                    warn_flags = [
+                        flag for flag in value_assessment.get("red_flags", [])
+                        if flag.get("severity") == "warn"
+                    ]
+                    cautions = value_assessment.get("cautions", []) or []
+                    open_questions = value_assessment.get("open_questions", []) or []
+
+                    q_score = quality.get("score")
+                    v_score = valuation.get("score")
+
+                    with st.expander("🧭 价值体检（独立判断，不纳入综合评分）", expanded=True):
+                        st.caption("价值体检只做长期质地与估值的旁路判断，不参与综合评分、买卖评级或自动预警。")
+
+                        if gate.get("passed"):
+                            st.success("门槛状态：可评估")
+                        else:
+                            missing = "、".join(gate.get("missing_fields", []) or []) or "未知字段"
+                            st.warning(f"门槛状态：补数据；缺失项：{missing}")
+
+                        vc1, vc2, vc3, vc4 = st.columns(4)
+                        vc1.markdown(
+                            cmet("价值结论", _safe_text(value_assessment.get("combo")), "#E6EDF3", "一句话体检", size="1.45em"),
+                            unsafe_allow_html=True,
+                        )
+                        vc2.markdown(
+                            cmet("质地档", _safe_text(quality.get("tier")), _score_badge_color(q_score, 10), f"{q_score if q_score is not None else '—'}/10", size="1.9em"),
+                            unsafe_allow_html=True,
+                        )
+                        vc3.markdown(
+                            cmet("估值档", _safe_text(valuation.get("tier")), _score_badge_color(v_score, 6), f"{v_score if v_score is not None else '—'}/6", size="1.9em"),
+                            unsafe_allow_html=True,
+                        )
+                        vc4.markdown(
+                            cmet("行业口径", _safe_text(value_assessment.get("industry_kind")), "#ADBAC7", _safe_text(details.get("industry")), size="1.45em"),
+                            unsafe_allow_html=True,
+                        )
+
+                        quality_labels = {
+                            "Q1_roe": "ROE 与稳定性",
+                            "Q2_cashflow": "现金流质量",
+                            "Q3_moat": "毛利率/护城河",
+                            "Q4_growth": "增长协调性",
+                            "Q5_balance": "负债/风控",
+                        }
+                        valuation_labels = {
+                            "V1_history": "历史分位/绝对估值",
+                            "V2_vs_quality": "质价匹配",
+                            "V3_yield": "股息回报",
+                        }
+
+                        def _dimension_rows(dimensions, labels):
+                            rows = []
+                            for key, item in (dimensions or {}).items():
+                                rows.append({
+                                    "维度": labels.get(key, key),
+                                    "得分": item.get("score"),
+                                    "说明": item.get("why", ""),
+                                })
+                            return rows
+
+                        left, right = st.columns(2)
+                        with left:
+                            st.markdown("**质地 5 维**")
+                            rows = _dimension_rows(quality.get("dimensions"), quality_labels)
+                            if rows:
+                                st.dataframe(
+                                    pd.DataFrame(rows),
+                                    hide_index=True,
+                                    width="stretch",
+                                    key=f"value_quality_dims_{sym}",
+                                )
+                        with right:
+                            st.markdown("**估值 3 维**")
+                            rows = _dimension_rows(valuation.get("dimensions"), valuation_labels)
+                            if rows:
+                                st.dataframe(
+                                    pd.DataFrame(rows),
+                                    hide_index=True,
+                                    width="stretch",
+                                    key=f"value_valuation_dims_{sym}",
+                                )
+
+                        f1, f2 = st.columns(2)
+
+                        def _flag_rows(items):
+                            return [
+                                {
+                                    "代码": item.get("code", ""),
+                                    "名称": item.get("name", ""),
+                                    "影响": item.get("effect", ""),
+                                }
+                                for item in items
+                            ]
+
+                        with f1:
+                            st.markdown("**红旗（warn）**")
+                            if warn_flags:
+                                st.dataframe(
+                                    pd.DataFrame(_flag_rows(warn_flags)),
+                                    hide_index=True,
+                                    width="stretch",
+                                    key=f"value_warn_flags_{sym}",
+                                )
+                            else:
+                                st.caption("暂无真实缺陷红旗")
+                        with f2:
+                            st.markdown("**提示（info，不计入冲突）**")
+                            if cautions:
+                                st.dataframe(
+                                    pd.DataFrame(_flag_rows(cautions)),
+                                    hide_index=True,
+                                    width="stretch",
+                                    key=f"value_cautions_{sym}",
+                                )
+                            else:
+                                st.caption("暂无行业口径提示")
+
+                        if open_questions:
+                            st.markdown("**开放问题（不打分、需人判断）**")
+                            for idx, question in enumerate(open_questions, start=1):
+                                st.caption(f"{idx}. {question}")
+
+                        missing_fields = details.get("missing_fields", []) or []
+                        source_columns = details.get("source_columns", {}) or {}
+                        errors = details.get("errors", []) or []
+                        st.markdown("**取数透明度**")
+                        if missing_fields:
+                            st.caption("缺失字段：" + "、".join(str(item) for item in missing_fields))
+                        if errors:
+                            st.caption("取数异常：" + "；".join(str(item) for item in errors))
+                        if source_columns:
+                            source_rows = []
+                            for key, value in sorted(source_columns.items()):
+                                if isinstance(value, (list, tuple)):
+                                    value = "、".join(str(item) for item in value)
+                                elif isinstance(value, dict):
+                                    value = json.dumps(value, ensure_ascii=False)
+                                source_rows.append({"字段": key, "来源列": value})
+                            st.dataframe(
+                                pd.DataFrame(source_rows),
+                                hide_index=True,
+                                width="stretch",
+                                key=f"value_source_columns_{sym}",
+                            )
+                        elif not missing_fields and not errors:
+                            st.caption("暂无额外缺失或来源列记录")
+
                 def _report_nrmse_score(nrmse_pct):
                     if nrmse_pct <= 2:
                         return 95
@@ -1410,7 +1595,13 @@ with col_right:
                             unsafe_allow_html=True,
                         )
 
+                value_assessment = r.get("value_assessment")
+                if value_assessment and value_assessment.get("conflict_with_signal"):
+                    flag_summary = _value_flag_summary(value_assessment) or "价值体检发现真实风险红旗"
+                    st.warning(f"⚠ 基本面警示：{flag_summary}")
+
                 st.markdown("")
+                _render_value_assessment_panel()
 
                 def _render_rmse_panel():
                     sp_ = r.get("short_pred")
