@@ -142,8 +142,13 @@ def fetch_quality_metrics(symbol: str) -> dict:
         "cashflow_to_profit": None,
         "cashflow_to_profit_series": [],
         "deducted_net_profit": None,
+        "deducted_net_profit_indicator": None,
+        "deducted_net_profit_abstract": None,
         "parent_net_profit": None,
+        "parent_net_profit_indicator": None,
+        "parent_net_profit_abstract": None,
         "deducted_profit_ratio": None,
+        "deducted_profit_ratio_source": None,
         "gross_margin": None,
         "gross_margin_series": [],
         "revenue_growth": None,
@@ -224,7 +229,22 @@ def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
     )
     metrics["source_columns"]["deducted_net_profit_indicator"] = deducted_col
     if deducted_col:
-        metrics["deducted_net_profit"] = _latest_notna(_numeric_series(df[deducted_col]))
+        metrics["deducted_net_profit_indicator"] = _latest_notna(_numeric_series(df[deducted_col]))
+
+    parent_col = _find_column(
+        df,
+        candidates=(
+            "归属于母公司所有者的净利润(元)",
+            "归属于母公司股东的净利润(元)",
+            "归属母公司股东的净利润(元)",
+            "净利润(元)",
+        ),
+    )
+    metrics["source_columns"]["parent_net_profit_indicator"] = parent_col
+    if parent_col:
+        metrics["parent_net_profit_indicator"] = _latest_notna(_numeric_series(df[parent_col]))
+
+    _refresh_deducted_profit_ratio(metrics)
 
 
 def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
@@ -236,13 +256,47 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     revenue = _latest_abstract_value(df, ("营业总收入", "营业收入"))
 
     if parent is not None:
-        metrics["parent_net_profit"] = parent
+        metrics["parent_net_profit_abstract"] = parent
     if deducted is not None:
-        metrics["deducted_net_profit"] = deducted
-    if parent not in (None, 0) and deducted is not None:
-        metrics["deducted_profit_ratio"] = deducted / parent
+        metrics["deducted_net_profit_abstract"] = deducted
+    _refresh_deducted_profit_ratio(metrics)
     if revenue is not None:
         metrics["latest_revenue"] = revenue
+
+
+def _refresh_deducted_profit_ratio(metrics: dict) -> None:
+    pairs = (
+        ("abstract", "deducted_net_profit_abstract", "parent_net_profit_abstract"),
+        ("indicator", "deducted_net_profit_indicator", "parent_net_profit_indicator"),
+        ("mixed_indicator_deducted_abstract_parent", "deducted_net_profit_indicator", "parent_net_profit_abstract"),
+        ("mixed_abstract_deducted_indicator_parent", "deducted_net_profit_abstract", "parent_net_profit_indicator"),
+    )
+
+    for source, deducted_key, parent_key in pairs:
+        deducted = metrics.get(deducted_key)
+        parent = metrics.get(parent_key)
+        if deducted is None or parent in (None, 0):
+            continue
+        ratio = deducted / parent
+        if abs(ratio) > 5:
+            metrics["errors"].append(f"扣非比率口径疑似不一致，已跳过: {source}")
+            continue
+        metrics["deducted_net_profit"] = deducted
+        metrics["parent_net_profit"] = parent
+        metrics["deducted_profit_ratio"] = ratio
+        metrics["deducted_profit_ratio_source"] = source
+        return
+
+    metrics["deducted_net_profit"] = (
+        metrics.get("deducted_net_profit_abstract")
+        if metrics.get("deducted_net_profit_abstract") is not None
+        else metrics.get("deducted_net_profit_indicator")
+    )
+    metrics["parent_net_profit"] = (
+        metrics.get("parent_net_profit_abstract")
+        if metrics.get("parent_net_profit_abstract") is not None
+        else metrics.get("parent_net_profit_indicator")
+    )
 
 
 def _find_column(df: pd.DataFrame, candidates=(), keywords=()) -> str | None:

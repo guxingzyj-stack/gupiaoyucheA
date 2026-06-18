@@ -8,7 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from analysis.fundamental import _fill_quality_from_indicator
+from analysis.fundamental import _fill_quality_from_abstract, _fill_quality_from_indicator
 from analysis.value_score import evaluate_value
 
 
@@ -134,6 +134,32 @@ def test_cashflow_percent_column_always_divides_by_100():
     assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 0
 
 
+def test_deducted_profit_ratio_uses_indicator_and_abstract_fallback():
+    metrics = {"source_columns": {}, "errors": []}
+    indicator_df = pd.DataFrame({
+        "日期": ["2025-12-31"],
+        "扣除非经常性损益后的净利润(元)": [60],
+    })
+    abstract_df = pd.DataFrame({
+        "指标": ["归母净利润"],
+        "2025": [100],
+    })
+    _fill_quality_from_indicator(metrics, indicator_df)
+    assert metrics.get("deducted_profit_ratio") is None
+
+    _fill_quality_from_abstract(metrics, abstract_df)
+    result = evaluate_value(
+        "000008",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(deducted_profit_ratio=metrics["deducted_profit_ratio"]),
+    )
+
+    assert metrics["deducted_profit_ratio"] == 0.6
+    assert metrics["deducted_profit_ratio_source"] == "mixed_indicator_deducted_abstract_parent"
+    assert any(flag["code"] == "R1" for flag in result["red_flags"])
+
+
 def test_tier_boundaries():
     result_a = evaluate_value(
         "000005",
@@ -165,6 +191,7 @@ def run_all():
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
     test_cashflow_percent_column_always_divides_by_100()
+    test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()
     print("test_value_score passed")
 
