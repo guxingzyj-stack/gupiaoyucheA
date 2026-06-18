@@ -380,23 +380,39 @@ def _score_quality_price_match(data: dict, industry_kind: str, quality: dict) ->
     if pe is None or pe <= 0:
         return {"score": 0, "why": "PE缺失或无效，无法评估质价匹配"}
 
-    growth_pct = _profit_growth_percent(data)
-    if growth_pct is not None and growth_pct > 0:
-        peg = pe / growth_pct
-        basis = "多年利润CAGR" if data.get("profit_cagr") is not None else "最新净利润增速"
-        if peg <= 1:
-            return {"score": 2, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 较低"}
-        if peg <= 1.5:
-            return {"score": 1, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 尚可"}
-        return {"score": 0, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 偏高"}
-
-    if roe is None:
+    candidates = []
+    peg_score = _score_peg_match(data, pe)
+    if peg_score is not None:
+        candidates.append(peg_score)
+    roe_score = _score_roe_anchor_match(pe, roe)
+    if roe_score is not None:
+        candidates.append(roe_score)
+    if not candidates:
         return {"score": 0, "why": "缺少有效利润增速和ROE，无法评估质价匹配"}
+    return max(candidates, key=lambda item: item["score"])
+
+
+def _score_peg_match(data: dict, pe: float) -> dict | None:
+    growth_pct = _profit_growth_percent(data)
+    if growth_pct is None or growth_pct <= 0:
+        return None
+    peg = pe / growth_pct
+    basis = "多年利润CAGR" if data.get("profit_cagr") is not None else "最新净利润增速"
+    if peg <= 1:
+        return {"score": 2, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 较低"}
+    if peg <= 1.5:
+        return {"score": 1, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 尚可"}
+    return {"score": 0, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 偏高"}
+
+
+def _score_roe_anchor_match(pe: float, roe: float | None) -> dict | None:
+    if roe is None:
+        return None
     if pe <= roe:
-        return {"score": 2, "why": f"缺少有效增长口径，PE {pe:.1f} 不高于ROE {roe:.1f}%"}
+        return {"score": 2, "why": f"ROE锚：PE {pe:.1f} 不高于ROE {roe:.1f}%"}
     if pe <= 1.5 * roe:
-        return {"score": 1, "why": f"缺少有效增长口径，PE {pe:.1f} 不高于1.5倍ROE {roe:.1f}%"}
-    return {"score": 0, "why": f"缺少有效增长口径，PE {pe:.1f} 高于1.5倍ROE {roe:.1f}%"}
+        return {"score": 1, "why": f"ROE锚：PE {pe:.1f} 不高于1.5倍ROE {roe:.1f}%"}
+    return {"score": 0, "why": f"ROE锚：PE {pe:.1f} 高于1.5倍ROE {roe:.1f}%"}
 
 
 def _score_yield(data: dict) -> dict:

@@ -601,6 +601,20 @@ def test_quality_price_match_uses_profit_cagr_peg_boundaries():
     assert weak["valuation"]["dimensions"]["V2_vs_quality"]["score"] == 0
 
 
+def test_quality_price_match_uses_roe_anchor_when_peg_is_high():
+    result = evaluate_value(
+        "000025",
+        base_stock(),
+        base_fundamental(pe=18),
+        base_metrics(roe=20, profit_cagr=0.05, profit_years=5),
+    )
+
+    v2 = result["valuation"]["dimensions"]["V2_vs_quality"]
+    assert v2["score"] == 2
+    assert "ROE锚" in v2["why"]
+    assert "PE 18.0 不高于ROE 20.0%" in v2["why"]
+
+
 def test_quality_price_match_uses_roe_when_profit_history_cagr_invalid():
     result = evaluate_value(
         "000024",
@@ -617,6 +631,7 @@ def test_quality_price_match_uses_roe_when_profit_history_cagr_invalid():
 
     v2 = result["valuation"]["dimensions"]["V2_vs_quality"]
     assert v2["score"] == 1
+    assert "ROE锚" in v2["why"]
     assert "ROE 15.0%" in v2["why"]
     assert "PEG" not in v2["why"]
 
@@ -711,6 +726,7 @@ def run_all():
     test_cyclical_low_profit_uses_lower_normalized_pe()
     test_cyclical_missing_normalized_pe_adds_open_question()
     test_quality_price_match_uses_profit_cagr_peg_boundaries()
+    test_quality_price_match_uses_roe_anchor_when_peg_is_high()
     test_quality_price_match_uses_roe_when_profit_history_cagr_invalid()
     test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
