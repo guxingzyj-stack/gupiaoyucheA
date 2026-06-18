@@ -261,11 +261,11 @@ def test_roe_without_history_cannot_score_full():
     assert "缺历史序列" in q1["why"]
 
 
-def test_cashflow_percent_column_always_divides_by_100():
+def test_cashflow_uses_annual_ratio_without_percent_division():
     metrics = {"source_columns": {}}
     df = pd.DataFrame({
-        "日期": ["2025-12-31"],
-        "经营现金净流量与净利润的比率(%)": [4],
+        "日期": ["2026-03-31", "2025-12-31", "2024-12-31"],
+        "经营现金净流量与净利润的比率(%)": [-0.5, 1.2, 0.9],
     })
     _fill_quality_from_indicator(metrics, df)
 
@@ -275,8 +275,9 @@ def test_cashflow_percent_column_always_divides_by_100():
         base_fundamental(),
         base_metrics(cashflow_to_profit=metrics["cashflow_to_profit"]),
     )
-    assert metrics["cashflow_to_profit"] == 0.04
-    assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 0
+    assert metrics["cashflow_to_profit"] == 1.2
+    assert metrics["cashflow_to_profit_series"] == [1.2, 0.9]
+    assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 2
 
 
 def test_fetch_financial_indicators_uses_shared_growth_columns():
@@ -575,7 +576,7 @@ def run_all():
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
     test_roe_without_history_cannot_score_full()
-    test_cashflow_percent_column_always_divides_by_100()
+    test_cashflow_uses_annual_ratio_without_percent_division()
     test_fetch_financial_indicators_uses_shared_growth_columns()
     test_stock_info_industry_fallback_from_individual_info()
     test_industry_fallback_uses_persistent_cache_when_live_empty()

@@ -204,11 +204,11 @@ def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
         series = _numeric_series(df[col])
         latest = _latest_notna(series)
         if field in ("cashflow_to_profit",):
-            metrics[field] = _percent_to_ratio(latest, is_percent=True)
-            metrics[f"{field}_series"] = [
-                _percent_to_ratio(x, is_percent=True)
-                for x in series.dropna().head(5).tolist()
-            ]
+            annual_series = _annual_indicator_series(df, col)
+            if not annual_series.empty:
+                metrics[field] = float(annual_series.iloc[0])
+                metrics[f"{field}_series"] = annual_series.head(5).tolist()
+                metrics["source_columns"][field] = f"{col}:年度"
         elif field in ("roe", "gross_margin"):
             metrics[field] = latest
             metrics[f"{field}_series"] = series.dropna().head(5).tolist()
@@ -454,6 +454,20 @@ def _recent_valuation_window(df: pd.DataFrame) -> pd.DataFrame:
     result["_valuation_date"] = dates.loc[result.index]
     result = result.sort_values("_valuation_date")
     return result.drop(columns=["_valuation_date"])
+
+
+def _annual_indicator_series(df: pd.DataFrame, value_col: str) -> pd.Series:
+    date_col = _find_column(df, candidates=("日期", "date", "报告期", "截止日期"))
+    if not date_col or value_col not in df.columns:
+        return pd.Series(dtype=float)
+    dates = pd.to_datetime(df[date_col], errors="coerce")
+    annual_mask = dates.dt.month.eq(12) & dates.dt.day.eq(31)
+    if not annual_mask.any():
+        return pd.Series(dtype=float)
+    annual_df = df.loc[annual_mask].copy()
+    annual_df["_annual_date"] = dates.loc[annual_mask]
+    annual_df = annual_df.sort_values("_annual_date", ascending=False)
+    return _numeric_series(annual_df[value_col]).dropna()
 
 
 def _symbol_candidates(symbol: str) -> tuple[str, ...]:
