@@ -93,6 +93,70 @@ def _get_secid(symbol: str) -> str:
     return f"{mkt}.{symbol}"
 
 
+def _non_empty(value) -> str:
+    text = str(value or "").strip()
+    if text in ("", "-", "None", "nan"):
+        return ""
+    return text
+
+
+def _fill_industry_fallback(info: dict, symbol: str) -> None:
+    """为行业字段做保守兜底：取不到就保持空值，不编造。"""
+    if _non_empty(info.get("所属行业")):
+        return
+
+    try:
+        import akshare as ak
+
+        df = ak.stock_individual_info_em(symbol=symbol)
+        if df is not None and not df.empty:
+            key_col = _find_info_column(df, ("item", "指标", "项目", "key"))
+            value_col = _find_info_column(df, ("value", "值", "内容", "数据"))
+            if key_col and value_col:
+                for _, row in df.iterrows():
+                    name = str(row.get(key_col, ""))
+                    if "行业" in name:
+                        industry = _non_empty(row.get(value_col))
+                        if industry:
+                            info["所属行业"] = industry
+                            info["industry_source"] = "stock_individual_info_em"
+                            return
+    except Exception as exc:
+        _logger.warning("AKShare行业兜底失败 %s: %s", symbol, exc)
+
+    industry = _fetch_industry_from_quote_board(symbol)
+    if industry:
+        info["所属行业"] = industry
+        info["industry_source"] = "eastmoney_quote_f127"
+
+
+def _find_info_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    lower_map = {str(col).lower(): str(col) for col in df.columns}
+    for candidate in candidates:
+        found = lower_map.get(candidate.lower())
+        if found:
+            return found
+    return None
+
+
+def _fetch_industry_from_quote_board(symbol: str) -> str:
+    try:
+        secid = _get_secid(symbol)
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        params = {
+            "secid": secid,
+            "ut": "7eea3edcaed734bea9cbfc24409ed989",
+            "fields": "f57,f58,f127",
+        }
+        r = cfreq.get(url, params=params, headers=_HEADERS, timeout=15)
+        d = r.json()
+        if d.get("data"):
+            return _non_empty(d["data"].get("f127"))
+    except Exception as exc:
+        _logger.warning("东方财富行业板块兜底失败 %s: %s", symbol, exc)
+    return ""
+
+
 def _fetch_kline_direct(symbol: str, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:
     """
     直接调用东方财富K线API（curl_cffi，模拟浏览器请求头）
@@ -266,6 +330,8 @@ def fetch_stock_info(symbol: str) -> dict:
     # 确保有名字
     if "股票简称" not in info or not info["股票简称"]:
         info["股票简称"] = symbol
+
+    _fill_industry_fallback(info, symbol)
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(info, f, ensure_ascii=False)

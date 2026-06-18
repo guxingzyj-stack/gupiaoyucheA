@@ -9,6 +9,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from data.fetcher import _fill_industry_fallback
 from analysis.fundamental import (
     _compute_percentile,
     _fetch_financial_indicators,
@@ -251,6 +252,42 @@ def test_fetch_financial_indicators_uses_shared_growth_columns():
     assert result["profit_growth"] == 8
 
 
+def test_stock_info_industry_fallback_from_individual_info():
+    previous = sys.modules.get("akshare")
+    fake_df = pd.DataFrame({
+        "item": ["总市值", "行业"],
+        "value": ["100亿", "银行"],
+    })
+    sys.modules["akshare"] = types.SimpleNamespace(
+        stock_individual_info_em=lambda symbol: fake_df
+    )
+    try:
+        info = {}
+        _fill_industry_fallback(info, "600036")
+    finally:
+        if previous is None:
+            sys.modules.pop("akshare", None)
+        else:
+            sys.modules["akshare"] = previous
+
+    assert info["所属行业"] == "银行"
+    assert info["industry_source"] == "stock_individual_info_em"
+
+
+def test_gross_margin_fallback_from_abstract_revenue_cost():
+    metrics = {"source_columns": {}, "errors": []}
+    abstract_df = pd.DataFrame({
+        "指标": ["营业总收入", "营业成本"],
+        "2025": [100, 64],
+    })
+
+    _fill_quality_from_abstract(metrics, abstract_df)
+
+    assert metrics["gross_margin"] == 36
+    assert metrics["gross_margin_series"] == [36]
+    assert metrics["source_columns"]["gross_margin"] == "stock_financial_abstract:(营业总收入-营业成本)/营业总收入"
+
+
 def test_compute_percentile_filters_invalid_values():
     percentile = _compute_percentile([-1, 0, 1, 3, 5, None], 3)
     assert round(percentile, 2) == 66.67
@@ -322,6 +359,8 @@ def run_all():
     test_roe_without_history_cannot_score_full()
     test_cashflow_percent_column_always_divides_by_100()
     test_fetch_financial_indicators_uses_shared_growth_columns()
+    test_stock_info_industry_fallback_from_individual_info()
+    test_gross_margin_fallback_from_abstract_revenue_cost()
     test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()

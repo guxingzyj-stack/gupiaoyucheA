@@ -237,6 +237,8 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     parent = _latest_abstract_value(df, ("归母净利润", "归属于母公司股东的净利润"))
     deducted = _latest_abstract_value(df, ("扣非", "扣除非经常性损益"))
     revenue = _latest_abstract_value(df, ("营业总收入", "营业收入"))
+    gross_margin = _latest_abstract_value(df, ("销售毛利率", "毛利率"))
+    cost = _latest_abstract_value(df, ("营业成本",))
 
     if parent is not None:
         metrics["parent_net_profit_abstract"] = parent
@@ -245,6 +247,18 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     _refresh_deducted_profit_ratio(metrics)
     if revenue is not None:
         metrics["latest_revenue"] = revenue
+    if metrics.get("gross_margin") is None and gross_margin is not None:
+        metrics["gross_margin"] = gross_margin
+        metrics["gross_margin_series"] = [gross_margin]
+        metrics["source_columns"]["gross_margin"] = "stock_financial_abstract:销售毛利率"
+    if (
+        metrics.get("gross_margin") is None
+        and revenue not in (None, 0)
+        and cost is not None
+    ):
+        metrics["gross_margin"] = (revenue - cost) / revenue * 100
+        metrics["gross_margin_series"] = [metrics["gross_margin"]]
+        metrics["source_columns"]["gross_margin"] = "stock_financial_abstract:(营业总收入-营业成本)/营业总收入"
 
 
 def _refresh_deducted_profit_ratio(metrics: dict) -> None:
