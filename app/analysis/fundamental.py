@@ -144,6 +144,9 @@ def fetch_quality_metrics(symbol: str) -> dict:
         "revenue_series": [],
         "revenue_cagr": None,
         "revenue_years": None,
+        "profit_series": [],
+        "profit_cagr": None,
+        "profit_years": None,
         "profit_growth": None,
         "debt_ratio": None,
         "pe_percentile": None,
@@ -271,6 +274,7 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     if parent is not None:
         metrics["parent_net_profit_abstract"] = parent
     _fill_normalized_profit_factor(metrics, parent_series)
+    _fill_profit_cagr(metrics, parent_series)
     if deducted is not None:
         metrics["deducted_net_profit_abstract"] = deducted
     _refresh_deducted_profit_ratio(metrics)
@@ -663,6 +667,23 @@ def _fill_revenue_cagr(metrics: dict, revenue_series: list[float]) -> None:
         return
     metrics["revenue_cagr"] = (latest / earliest) ** (1 / periods) - 1
     metrics["source_columns"]["revenue_cagr"] = "stock_financial_abstract:年度营业总收入CAGR"
+
+
+def _fill_profit_cagr(metrics: dict, profit_series: list[float]) -> None:
+    values = [float(v) for v in profit_series if v is not None and not np.isnan(float(v))]
+    if values:
+        metrics["profit_series"] = values
+        metrics["profit_years"] = len(values)
+        metrics["source_columns"]["profit_series"] = "stock_financial_abstract:年度归母净利润"
+    if len(values) < 5:
+        return
+    latest = values[0]
+    earliest = values[-1]
+    periods = len(values) - 1
+    if latest <= 0 or earliest <= 0 or periods <= 0:
+        return
+    metrics["profit_cagr"] = (latest / earliest) ** (1 / periods) - 1
+    metrics["source_columns"]["profit_cagr"] = "stock_financial_abstract:年度归母净利润CAGR"
 
 
 def _fill_normalized_pe(metrics: dict) -> None:

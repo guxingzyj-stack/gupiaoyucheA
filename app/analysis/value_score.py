@@ -58,6 +58,9 @@ def evaluate_value(
         "revenue_cagr": _pick_num("revenue_cagr", quality_metrics, fundamental),
         "revenue_years": _pick_num("revenue_years", quality_metrics, fundamental),
         "profit_growth": _pick_num("profit_growth", quality_metrics, fundamental),
+        "profit_series": _pick_series("profit_series", quality_metrics),
+        "profit_cagr": _pick_num("profit_cagr", quality_metrics, fundamental),
+        "profit_years": _pick_num("profit_years", quality_metrics, fundamental),
         "debt_ratio": _pick_num("debt_ratio", quality_metrics, fundamental),
         "pe": _pick_num("pe", fundamental, stock_info, quality_metrics),
         "pb": _pick_num("pb", fundamental, stock_info, quality_metrics),
@@ -365,7 +368,6 @@ def _score_quality_price_match(data: dict, industry_kind: str, quality: dict) ->
     pe = data.get("pe")
     pb = data.get("pb")
     roe = data.get("roe")
-    tier = quality.get("tier")
     if industry_kind == "bank":
         if roe is None or pb is None:
             return {"score": 0, "why": "银行PB/ROE匹配数据缺失"}
@@ -375,13 +377,26 @@ def _score_quality_price_match(data: dict, industry_kind: str, quality: dict) ->
             return {"score": 1, "why": "银行ROE与PB匹配度一般"}
         return {"score": 0, "why": "银行ROE与PB匹配度偏弱"}
 
-    if pe is None:
-        return {"score": 0, "why": "PE缺失，无法评估质价匹配"}
-    if tier in ("A", "B") and pe <= 25:
-        return {"score": 2, "why": "质量不差且估值不贵"}
-    if tier in ("A", "B") and pe <= 40:
-        return {"score": 1, "why": "质量不差但估值略高"}
-    return {"score": 0, "why": "质量或估值匹配度不足"}
+    if pe is None or pe <= 0:
+        return {"score": 0, "why": "PE缺失或无效，无法评估质价匹配"}
+
+    growth_pct = _profit_growth_percent(data)
+    if growth_pct is not None and growth_pct > 0:
+        peg = pe / growth_pct
+        basis = "多年利润CAGR" if data.get("profit_cagr") is not None else "最新净利润增速"
+        if peg <= 1:
+            return {"score": 2, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 较低"}
+        if peg <= 1.5:
+            return {"score": 1, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 尚可"}
+        return {"score": 0, "why": f"{basis} {growth_pct:.1f}%，PEG {peg:.2f} 偏高"}
+
+    if roe is None:
+        return {"score": 0, "why": "缺少有效利润增速和ROE，无法评估质价匹配"}
+    if pe <= roe:
+        return {"score": 2, "why": f"缺少有效增长口径，PE {pe:.1f} 不高于ROE {roe:.1f}%"}
+    if pe <= 1.5 * roe:
+        return {"score": 1, "why": f"缺少有效增长口径，PE {pe:.1f} 不高于1.5倍ROE {roe:.1f}%"}
+    return {"score": 0, "why": f"缺少有效增长口径，PE {pe:.1f} 高于1.5倍ROE {roe:.1f}%"}
 
 
 def _score_yield(data: dict) -> dict:
@@ -464,6 +479,21 @@ def _pick_num(field: str, *sources: dict) -> float | None:
         return float(str(value).replace("%", "").replace(",", ""))
     except Exception:
         return None
+
+
+def _profit_growth_percent(data: dict) -> float | None:
+    profit_cagr = data.get("profit_cagr")
+    if profit_cagr is not None:
+        return profit_cagr * 100
+
+    profit_years = data.get("profit_years")
+    profit_series = data.get("profit_series") or []
+    if profit_years is None and profit_series:
+        profit_years = len(profit_series)
+    if profit_years is not None and profit_years >= 5:
+        return None
+
+    return data.get("profit_growth")
 
 
 def _pick_series(field: str, *sources: dict) -> list[float]:

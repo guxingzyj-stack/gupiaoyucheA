@@ -513,6 +513,9 @@ def test_normalized_pe_from_annual_profit_series():
     assert metrics["normalized_years"] == 5
     assert metrics["normalized_factor"] == 3
     assert metrics["normalized_pe"] == 24
+    assert metrics["profit_series"] == [300, 50, 50, 50, 50]
+    assert metrics["profit_years"] == 5
+    assert round(metrics["profit_cagr"], 4) == round((300 / 50) ** (1 / 4) - 1, 4)
 
 
 def test_revenue_cagr_from_annual_revenue_series():
@@ -571,6 +574,53 @@ def test_cyclical_missing_normalized_pe_adds_open_question():
     assert any("周期股低 PE 慎判" in item for item in result["open_questions"])
 
 
+def test_quality_price_match_uses_profit_cagr_peg_boundaries():
+    strong = evaluate_value(
+        "000021",
+        base_stock(),
+        base_fundamental(pe=12),
+        base_metrics(profit_cagr=0.12, profit_years=5),
+    )
+    medium = evaluate_value(
+        "000022",
+        base_stock(),
+        base_fundamental(pe=18),
+        base_metrics(profit_cagr=0.12, profit_years=5),
+    )
+    weak = evaluate_value(
+        "000023",
+        base_stock(),
+        base_fundamental(pe=24),
+        base_metrics(profit_cagr=0.12, profit_years=5),
+    )
+
+    assert strong["valuation"]["dimensions"]["V2_vs_quality"]["score"] == 2
+    assert "PEG 1.00" in strong["valuation"]["dimensions"]["V2_vs_quality"]["why"]
+    assert medium["valuation"]["dimensions"]["V2_vs_quality"]["score"] == 1
+    assert "PEG 1.50" in medium["valuation"]["dimensions"]["V2_vs_quality"]["why"]
+    assert weak["valuation"]["dimensions"]["V2_vs_quality"]["score"] == 0
+
+
+def test_quality_price_match_uses_roe_when_profit_history_cagr_invalid():
+    result = evaluate_value(
+        "000024",
+        base_stock(),
+        base_fundamental(pe=20),
+        base_metrics(
+            roe=15,
+            profit_growth=30,
+            profit_series=[100, 80, 60, 40, -10],
+            profit_years=5,
+            profit_cagr=None,
+        ),
+    )
+
+    v2 = result["valuation"]["dimensions"]["V2_vs_quality"]
+    assert v2["score"] == 1
+    assert "ROE 15.0%" in v2["why"]
+    assert "PEG" not in v2["why"]
+
+
 def test_compute_percentile_filters_invalid_values():
     percentile = _compute_percentile([-1, 0, 1, 3, 5, None], 3)
     assert round(percentile, 2) == 66.67
@@ -609,7 +659,7 @@ def test_tier_boundaries():
         "000005",
         base_stock(),
         base_fundamental(pe=10, dividend_yield=2),
-        base_metrics(debt_ratio=45),
+        base_metrics(debt_ratio=45, profit_growth=12),
     )
     assert result_a["quality"]["score"] == 8
     assert result_a["quality"]["tier"] == "A"
@@ -620,7 +670,7 @@ def test_tier_boundaries():
         "000006",
         base_stock(),
         base_fundamental(pe=10, dividend_yield=0),
-        base_metrics(debt_ratio=60),
+        base_metrics(debt_ratio=60, profit_growth=12),
     )
     assert result_b["quality"]["score"] == 7
     assert result_b["quality"]["tier"] == "B"
@@ -660,6 +710,8 @@ def run_all():
     test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe()
     test_cyclical_low_profit_uses_lower_normalized_pe()
     test_cyclical_missing_normalized_pe_adds_open_question()
+    test_quality_price_match_uses_profit_cagr_peg_boundaries()
+    test_quality_price_match_uses_roe_when_profit_history_cagr_invalid()
     test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()
