@@ -203,8 +203,11 @@ def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
         series = _numeric_series(df[col])
         latest = _latest_notna(series)
         if field in ("cashflow_to_profit",):
-            metrics[field] = _percent_to_ratio(latest)
-            metrics[f"{field}_series"] = [_percent_to_ratio(x) for x in series.dropna().head(5).tolist()]
+            metrics[field] = _percent_to_ratio(latest, is_percent=True)
+            metrics[f"{field}_series"] = [
+                _percent_to_ratio(x, is_percent=True)
+                for x in series.dropna().head(5).tolist()
+            ]
         elif field in ("roe", "gross_margin"):
             metrics[field] = latest
             metrics[f"{field}_series"] = series.dropna().head(5).tolist()
@@ -268,10 +271,12 @@ def _latest_notna(series: pd.Series) -> float | None:
     return float(series.iloc[0])
 
 
-def _percent_to_ratio(value):
+def _percent_to_ratio(value, is_percent: bool = False):
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
     value = float(value)
+    if is_percent:
+        return value / 100.0
     if abs(value) > 5:
         return value / 100.0
     return value

@@ -4,8 +4,11 @@
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from analysis.fundamental import _fill_quality_from_indicator
 from analysis.value_score import evaluate_value
 
 
@@ -113,6 +116,24 @@ def test_low_cashflow_scores_zero():
     assert "偏弱" in result["quality"]["dimensions"]["Q2_cashflow"]["why"]
 
 
+def test_cashflow_percent_column_always_divides_by_100():
+    metrics = {"source_columns": {}}
+    df = pd.DataFrame({
+        "日期": ["2025-12-31"],
+        "经营现金净流量与净利润的比率(%)": [4],
+    })
+    _fill_quality_from_indicator(metrics, df)
+
+    result = evaluate_value(
+        "000007",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(cashflow_to_profit=metrics["cashflow_to_profit"]),
+    )
+    assert metrics["cashflow_to_profit"] == 0.04
+    assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 0
+
+
 def test_tier_boundaries():
     result_a = evaluate_value(
         "000005",
@@ -143,6 +164,7 @@ def run_all():
     test_value_trap_combo()
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
+    test_cashflow_percent_column_always_divides_by_100()
     test_tier_boundaries()
     print("test_value_score passed")
 
