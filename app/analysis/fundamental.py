@@ -94,35 +94,18 @@ def _fetch_financial_indicators(result: dict, symbol: str):
 
         df = df.sort_values(by=df.columns[0], ascending=False)
 
-        # ROE
-        for col in df.columns:
-            if "净资产收益率" in col or "ROE" in col:
-                try:
-                    val = float(str(df[col].iloc[0]).replace("%", ""))
-                    result["roe"] = val
-                except Exception:
-                    pass
-                break
-
-        # 营收增长率（同比）
-        for col in df.columns:
-            if "营业收入" in col and "增长" in col:
-                try:
-                    val = float(str(df[col].iloc[0]).replace("%", ""))
-                    result["revenue_growth"] = val
-                except Exception:
-                    pass
-                break
-
-        # 净利润增长率
-        for col in df.columns:
-            if "净利润" in col and "增长" in col:
-                try:
-                    val = float(str(df[col].iloc[0]).replace("%", ""))
-                    result["profit_growth"] = val
-                except Exception:
-                    pass
-                break
+        fields = {
+            "roe": (("净资产收益率(%)", "加权净资产收益率(%)"), ("净资产收益率",)),
+            "revenue_growth": (("主营业务收入增长率(%)",), ("收入", "增长")),
+            "profit_growth": (("净利润增长率(%)",), ("净利润", "增长")),
+        }
+        for field, (candidates, keywords) in fields.items():
+            col = _find_column(df, candidates=candidates, keywords=keywords)
+            if not col:
+                continue
+            val = _latest_notna(_numeric_series(df[col]))
+            if val is not None:
+                result[field] = val
 
     except Exception:
         pass
@@ -218,9 +201,6 @@ def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
             metrics[f"{field}_series"] = series.dropna().head(5).tolist()
         else:
             metrics[field] = latest
-
-        if field == "gross_margin":
-            metrics["gross_margin_series"] = series.dropna().head(5).tolist()
 
     deducted_col = _find_column(
         df,

@@ -3,12 +3,17 @@
 """
 import os
 import sys
+import types
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from analysis.fundamental import _fill_quality_from_abstract, _fill_quality_from_indicator
+from analysis.fundamental import (
+    _fetch_financial_indicators,
+    _fill_quality_from_abstract,
+    _fill_quality_from_indicator,
+)
 from analysis.value_score import evaluate_value
 
 
@@ -149,6 +154,31 @@ def test_cashflow_percent_column_always_divides_by_100():
     assert result["quality"]["dimensions"]["Q2_cashflow"]["score"] == 0
 
 
+def test_fetch_financial_indicators_uses_shared_growth_columns():
+    previous = sys.modules.get("akshare")
+    fake_df = pd.DataFrame({
+        "日期": ["2025-12-31"],
+        "净资产收益率(%)": [15],
+        "主营业务收入增长率(%)": [12],
+        "净利润增长率(%)": [8],
+    })
+    sys.modules["akshare"] = types.SimpleNamespace(
+        stock_financial_analysis_indicator=lambda symbol, start_year="2021": fake_df
+    )
+    try:
+        result = {}
+        _fetch_financial_indicators(result, "000010")
+    finally:
+        if previous is None:
+            sys.modules.pop("akshare", None)
+        else:
+            sys.modules["akshare"] = previous
+
+    assert result["roe"] == 15
+    assert result["revenue_growth"] == 12
+    assert result["profit_growth"] == 8
+
+
 def test_deducted_profit_ratio_uses_indicator_and_abstract_fallback():
     metrics = {"source_columns": {}, "errors": []}
     indicator_df = pd.DataFrame({
@@ -207,6 +237,7 @@ def run_all():
     test_low_cashflow_scores_zero()
     test_roe_without_history_cannot_score_full()
     test_cashflow_percent_column_always_divides_by_100()
+    test_fetch_financial_indicators_uses_shared_growth_columns()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()
     print("test_value_score passed")
