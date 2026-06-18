@@ -141,6 +141,12 @@ def fetch_quality_metrics(symbol: str) -> dict:
         "debt_ratio": None,
         "pe_percentile": None,
         "pb_percentile": None,
+        "pe": None,
+        "normalized_factor": None,
+        "normalized_pe": None,
+        "normalized_years": None,
+        "normalized_profit_latest": None,
+        "normalized_profit_mean": None,
         "npl_ratio": None,
         "provision_coverage": None,
         "capital_adequacy": None,
@@ -173,6 +179,7 @@ def fetch_quality_metrics(symbol: str) -> dict:
         metrics["errors"].append(f"财务摘要获取失败: {exc}")
 
     _fetch_valuation_percentiles(metrics, symbol, ak)
+    _fill_normalized_pe(metrics)
     _mark_missing_quality_fields(metrics)
     return metrics
 
@@ -235,6 +242,7 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
         metrics["errors"].append("财务摘要缺少指标列")
         return
     parent = _latest_abstract_value(df, ("归母净利润", "归属于母公司股东的净利润"))
+    parent_series = _annual_abstract_series(df, ("归母净利润", "归属于母公司股东的净利润"))
     deducted = _latest_abstract_value(df, ("扣非", "扣除非经常性损益"))
     revenue = _latest_abstract_value(df, ("营业总收入", "营业收入"))
     gross_margin = _latest_abstract_value(df, ("销售毛利率", "毛利率"))
@@ -246,6 +254,7 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
 
     if parent is not None:
         metrics["parent_net_profit_abstract"] = parent
+    _fill_normalized_profit_factor(metrics, parent_series)
     if deducted is not None:
         metrics["deducted_net_profit_abstract"] = deducted
     _refresh_deducted_profit_ratio(metrics)
@@ -393,6 +402,12 @@ def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
 def _fill_percentile_from_series(metrics: dict, field: str, series, source: str) -> None:
     values = _positive_numeric_series(series)
     current = _last_notna(values)
+    if field == "pe_percentile" and current is not None and metrics.get("pe") is None:
+        metrics["pe"] = current
+        metrics["source_columns"]["pe"] = source
+    if field == "pb_percentile" and current is not None and metrics.get("pb") is None:
+        metrics["pb"] = current
+        metrics["source_columns"]["pb"] = source
     percentile = _compute_percentile(values, current)
     metrics["source_columns"][field] = source
     if percentile is None:
@@ -503,6 +518,50 @@ def _latest_abstract_value(df: pd.DataFrame, keywords: tuple[str, ...]) -> float
             if not vals.empty:
                 return float(vals.iloc[0])
     return None
+
+
+def _annual_abstract_series(df: pd.DataFrame, keywords: tuple[str, ...], max_years: int = 7) -> list[float]:
+    value_cols = [c for c in df.columns if str(c).isdigit() and str(c).endswith("1231")]
+    if not value_cols:
+        return []
+    value_cols = sorted(value_cols, reverse=True)
+    for _, row in df.iterrows():
+        name = str(row.get("指标", ""))
+        if any(k in name for k in keywords):
+            vals = pd.to_numeric(row[value_cols], errors="coerce").dropna()
+            return [float(v) for v in vals.head(max_years).tolist()]
+    return []
+
+
+def _fill_normalized_profit_factor(metrics: dict, profit_series: list[float]) -> None:
+    values = [float(v) for v in profit_series if v is not None and not np.isnan(float(v))]
+    if len(values) < 5:
+        return
+    latest = values[0]
+    mean_profit = float(np.mean(values))
+    if latest <= 0 or mean_profit <= 0:
+        return
+    metrics["normalized_factor"] = latest / mean_profit
+    metrics["normalized_years"] = len(values)
+    metrics["normalized_profit_latest"] = latest
+    metrics["normalized_profit_mean"] = mean_profit
+    metrics["source_columns"]["normalized_factor"] = "stock_financial_abstract:年度归母净利润"
+
+
+def _fill_normalized_pe(metrics: dict) -> None:
+    pe = metrics.get("pe")
+    factor = metrics.get("normalized_factor")
+    if pe is None or factor is None:
+        return
+    try:
+        pe = float(pe)
+        factor = float(factor)
+    except Exception:
+        return
+    if pe <= 0 or factor <= 0:
+        return
+    metrics["normalized_pe"] = pe * factor
+    metrics["source_columns"]["normalized_pe"] = "pe*normalized_factor"
 
 
 def _mark_missing_quality_fields(metrics: dict) -> None:

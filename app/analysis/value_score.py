@@ -58,6 +58,9 @@ def evaluate_value(
         "debt_ratio": _pick_num("debt_ratio", quality_metrics, fundamental),
         "pe": _pick_num("pe", fundamental, stock_info, quality_metrics),
         "pb": _pick_num("pb", fundamental, stock_info, quality_metrics),
+        "normalized_pe": _pick_num("normalized_pe", quality_metrics, fundamental),
+        "normalized_factor": _pick_num("normalized_factor", quality_metrics, fundamental),
+        "normalized_years": _pick_num("normalized_years", quality_metrics, fundamental),
         "pe_percentile": _pick_num("pe_percentile", quality_metrics, fundamental),
         "pb_percentile": _pick_num("pb_percentile", quality_metrics, fundamental),
         "dividend_yield": _pick_num("dividend_yield", fundamental, stock_info, quality_metrics),
@@ -67,6 +70,9 @@ def evaluate_value(
         "top_customer_ratio": _pick_num("top_customer_ratio", quality_metrics, fundamental),
         "top_customer_risk": bool(quality_metrics.get("top_customer_risk") or fundamental.get("top_customer_risk")),
     }
+    merged_normalized_pe = _compute_normalized_pe(data.get("pe"), data.get("normalized_factor"))
+    if merged_normalized_pe is not None:
+        data["normalized_pe"] = merged_normalized_pe
 
     gate = _build_gate(data, industry_kind, quality_metrics)
     red_flags = _build_red_flags(data, industry_kind)
@@ -211,6 +217,8 @@ def _build_open_questions(data: dict, industry_kind: str, gate: dict, quality_me
         ):
             if data.get(key) is None:
                 questions.append(f"银行专属指标缺失：{label}")
+    if industry_kind in ("cyclical", "heavy_asset") and data.get("normalized_pe") is None:
+        questions.append("周期股低 PE 慎判，缺正常化数据")
     if any(v is None for v in (data.get("pe_percentile"), data.get("pb_percentile"))):
         questions.append("历史 PE/PB 分位缺失，估值仅按绝对值粗判")
     return questions
@@ -311,6 +319,16 @@ def _score_history_valuation(data: dict, industry_kind: str) -> dict:
         if pb <= 1.2:
             return {"score": 1, "why": f"银行按PB粗判，PB {pb:.2f} 合理"}
         return {"score": 0, "why": f"银行按PB粗判，PB {pb:.2f} 偏高"}
+
+    if industry_kind in ("cyclical", "heavy_asset") and data.get("normalized_pe") is not None:
+        normalized_pe = data["normalized_pe"]
+        years = data.get("normalized_years")
+        suffix = f"，基于近{int(years)}年利润" if years else ""
+        if 0 < normalized_pe <= 12:
+            return {"score": 2, "why": f"按正常化PE {normalized_pe:.1f} 偏低{suffix}"}
+        if normalized_pe <= 25:
+            return {"score": 1, "why": f"按正常化PE {normalized_pe:.1f} 合理{suffix}"}
+        return {"score": 0, "why": f"按正常化PE {normalized_pe:.1f} 偏高{suffix}"}
 
     if pe_percentile is not None:
         if pe_percentile <= 30:
@@ -439,6 +457,19 @@ def _pick_series(field: str, *sources: dict) -> list[float]:
     if not isinstance(value, (list, tuple)):
         value = [value]
     return _valid_series(value)
+
+
+def _compute_normalized_pe(pe, factor) -> float | None:
+    if pe is None or factor is None:
+        return None
+    try:
+        pe = float(pe)
+        factor = float(factor)
+    except Exception:
+        return None
+    if pe <= 0 or factor <= 0:
+        return None
+    return pe * factor
 
 
 def _valid_series(values) -> list[float]:

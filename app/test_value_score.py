@@ -14,6 +14,7 @@ from data.fetcher import _fill_industry_fallback
 from analysis.fundamental import (
     _compute_percentile,
     _fetch_financial_indicators,
+    _fill_normalized_pe,
     _fill_quality_from_abstract,
     _fill_quality_from_indicator,
 )
@@ -390,6 +391,63 @@ def test_bank_risk_metrics_from_abstract_feed_q5():
     assert result["quality"]["dimensions"]["Q5_balance"]["score"] == 2
 
 
+def test_normalized_pe_from_annual_profit_series():
+    metrics = {"source_columns": {}, "errors": [], "pe": 8}
+    abstract_df = pd.DataFrame({
+        "指标": ["归母净利润"],
+        "20251231": [300],
+        "20241231": [50],
+        "20231231": [50],
+        "20221231": [50],
+        "20211231": [50],
+    })
+
+    _fill_quality_from_abstract(metrics, abstract_df)
+    _fill_normalized_pe(metrics)
+
+    assert metrics["normalized_years"] == 5
+    assert metrics["normalized_factor"] == 3
+    assert metrics["normalized_pe"] == 24
+
+
+def test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe():
+    result = evaluate_value(
+        "600019",
+        base_stock(industry="钢铁"),
+        base_fundamental(industry="钢铁", pe=8, pb=1.2),
+        base_metrics(normalized_factor=3, normalized_years=5),
+    )
+
+    v1 = result["valuation"]["dimensions"]["V1_history"]
+    assert result["industry_kind"] == "heavy_asset"
+    assert v1["score"] == 1
+    assert "按正常化PE 24.0" in v1["why"]
+
+
+def test_cyclical_low_profit_uses_lower_normalized_pe():
+    result = evaluate_value(
+        "600019",
+        base_stock(industry="钢铁"),
+        base_fundamental(industry="钢铁", pe=20, pb=1.2),
+        base_metrics(normalized_factor=0.5, normalized_years=5),
+    )
+
+    v1 = result["valuation"]["dimensions"]["V1_history"]
+    assert v1["score"] == 2
+    assert "按正常化PE 10.0" in v1["why"]
+
+
+def test_cyclical_missing_normalized_pe_adds_open_question():
+    result = evaluate_value(
+        "600019",
+        base_stock(industry="钢铁"),
+        base_fundamental(industry="钢铁", pe=8, pb=1.2),
+        base_metrics(),
+    )
+
+    assert any("周期股低 PE 慎判" in item for item in result["open_questions"])
+
+
 def test_compute_percentile_filters_invalid_values():
     percentile = _compute_percentile([-1, 0, 1, 3, 5, None], 3)
     assert round(percentile, 2) == 66.67
@@ -468,6 +526,10 @@ def run_all():
     test_gross_margin_fallback_from_abstract_revenue_cost()
     test_bank_moat_uses_neutral_score()
     test_bank_risk_metrics_from_abstract_feed_q5()
+    test_normalized_pe_from_annual_profit_series()
+    test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe()
+    test_cyclical_low_profit_uses_lower_normalized_pe()
+    test_cyclical_missing_normalized_pe_adds_open_question()
     test_compute_percentile_filters_invalid_values()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()

@@ -11,6 +11,10 @@
     "industry": "银行",
     "source": "manual_verified"
   },
+  "600019": {
+    "industry": "钢铁",
+    "source": "manual_verified"
+  },
   "600660": {
     "industry": "汽车零部件",
     "source": "verified_cache:eastmoney_quote_f127"
