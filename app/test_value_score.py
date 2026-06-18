@@ -97,6 +97,43 @@ def test_value_trap_combo():
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 0
 
 
+def test_value_trap_uses_multi_year_revenue_downtrend():
+    result = evaluate_value(
+        "000016",
+        base_stock(),
+        base_fundamental(pe=8, pb=0.8),
+        base_metrics(revenue_growth=5, revenue_cagr=-0.02, revenue_years=5),
+    )
+
+    r2 = [flag for flag in result["red_flags"] if flag["code"] == "R2"]
+    assert r2
+    assert "多年营收CAGR -2.00%" in r2[0]["why"]
+
+
+def test_value_trap_ignores_single_year_drop_when_multi_year_revenue_grows():
+    result = evaluate_value(
+        "000017",
+        base_stock(),
+        base_fundamental(pe=8, pb=0.8),
+        base_metrics(revenue_growth=-5, revenue_cagr=0.05, revenue_years=5),
+    )
+
+    assert not any(flag["code"] == "R2" for flag in result["red_flags"])
+    assert result["details"]["metrics"]["revenue_cagr"] == 0.05
+
+
+def test_value_trap_does_not_flag_slight_positive_revenue_cagr():
+    result = evaluate_value(
+        "000018",
+        base_stock(),
+        base_fundamental(pe=8, pb=0.8),
+        base_metrics(revenue_growth=-1, revenue_cagr=0.001, revenue_years=5),
+    )
+
+    assert not any(flag["code"] == "R2" for flag in result["red_flags"])
+    assert result["details"]["metrics"]["revenue_cagr"] == 0.001
+
+
 def test_signal_conflict_true_for_buy_with_r2_warn_flag():
     result = evaluate_value(
         "000014",
@@ -410,6 +447,24 @@ def test_normalized_pe_from_annual_profit_series():
     assert metrics["normalized_pe"] == 24
 
 
+def test_revenue_cagr_from_annual_revenue_series():
+    metrics = {"source_columns": {}, "errors": []}
+    abstract_df = pd.DataFrame({
+        "指标": ["营业总收入"],
+        "20251231": [121],
+        "20241231": [110],
+        "20231231": [100],
+        "20221231": [90],
+        "20211231": [80],
+    })
+
+    _fill_quality_from_abstract(metrics, abstract_df)
+
+    assert metrics["revenue_series"] == [121, 110, 100, 90, 80]
+    assert metrics["revenue_years"] == 5
+    assert round(metrics["revenue_cagr"], 4) == round((121 / 80) ** (1 / 4) - 1, 4)
+
+
 def test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe():
     result = evaluate_value(
         "600019",
@@ -509,6 +564,9 @@ def run_all():
     test_missing_gate()
     test_profit_up_revenue_down_red_flag()
     test_value_trap_combo()
+    test_value_trap_uses_multi_year_revenue_downtrend()
+    test_value_trap_ignores_single_year_drop_when_multi_year_revenue_grows()
+    test_value_trap_does_not_flag_slight_positive_revenue_cagr()
     test_signal_conflict_true_for_buy_with_r2_warn_flag()
     test_signal_conflict_false_without_warn_flag()
     test_valuation_percentile_used_in_v1()
@@ -527,6 +585,7 @@ def run_all():
     test_bank_moat_uses_neutral_score()
     test_bank_risk_metrics_from_abstract_feed_q5()
     test_normalized_pe_from_annual_profit_series()
+    test_revenue_cagr_from_annual_revenue_series()
     test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe()
     test_cyclical_low_profit_uses_lower_normalized_pe()
     test_cyclical_missing_normalized_pe_adds_open_question()

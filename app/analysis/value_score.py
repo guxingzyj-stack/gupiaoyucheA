@@ -54,6 +54,9 @@ def evaluate_value(
         "gross_margin": _pick_num("gross_margin", quality_metrics, fundamental),
         "gross_margin_series": _pick_series("gross_margin_series", quality_metrics),
         "revenue_growth": _pick_num("revenue_growth", quality_metrics, fundamental),
+        "revenue_series": _pick_series("revenue_series", quality_metrics),
+        "revenue_cagr": _pick_num("revenue_cagr", quality_metrics, fundamental),
+        "revenue_years": _pick_num("revenue_years", quality_metrics, fundamental),
         "profit_growth": _pick_num("profit_growth", quality_metrics, fundamental),
         "debt_ratio": _pick_num("debt_ratio", quality_metrics, fundamental),
         "pe": _pick_num("pe", fundamental, stock_info, quality_metrics),
@@ -172,13 +175,25 @@ def _build_red_flags(data: dict, industry_kind: str) -> list[dict]:
             "effect": "质量降一档",
         })
 
-    if _looks_cheap(data, industry_kind) and revenue_growth is not None and revenue_growth <= 0:
-        flags.append({
-            "code": "R2",
-            "name": "低估值陷阱",
-            "severity": "warn",
-            "effect": "便宜不计正面",
-        })
+    if _looks_cheap(data, industry_kind):
+        revenue_cagr = data.get("revenue_cagr")
+        if revenue_cagr is not None:
+            if revenue_cagr <= 0:
+                flags.append({
+                    "code": "R2",
+                    "name": "低估值陷阱",
+                    "severity": "warn",
+                    "effect": "便宜不计正面",
+                    "why": f"多年营收CAGR {revenue_cagr * 100:.2f}%，低估值需谨慎",
+                })
+        elif revenue_growth is not None and revenue_growth <= 0:
+            flags.append({
+                "code": "R2",
+                "name": "低估值陷阱",
+                "severity": "warn",
+                "effect": "便宜不计正面",
+                "why": f"缺多年营收序列，按最新营收增长 {revenue_growth:.2f}% 回退判断",
+            })
 
     if data.get("top_customer_risk") or (
         data.get("top_customer_ratio") is not None and data["top_customer_ratio"] >= 40

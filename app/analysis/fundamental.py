@@ -137,6 +137,9 @@ def fetch_quality_metrics(symbol: str) -> dict:
         "gross_margin": None,
         "gross_margin_series": [],
         "revenue_growth": None,
+        "revenue_series": [],
+        "revenue_cagr": None,
+        "revenue_years": None,
         "profit_growth": None,
         "debt_ratio": None,
         "pe_percentile": None,
@@ -245,6 +248,7 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     parent_series = _annual_abstract_series(df, ("归母净利润", "归属于母公司股东的净利润"))
     deducted = _latest_abstract_value(df, ("扣非", "扣除非经常性损益"))
     revenue = _latest_abstract_value(df, ("营业总收入", "营业收入"))
+    revenue_series = _annual_abstract_series(df, ("营业总收入", "营业收入"))
     gross_margin = _latest_abstract_value(df, ("销售毛利率", "毛利率"))
     cost = _latest_abstract_value(df, ("营业成本",))
     npl_ratio = _latest_abstract_value(df, ("不良贷款率", "不良率"))
@@ -260,6 +264,7 @@ def _fill_quality_from_abstract(metrics: dict, df: pd.DataFrame) -> None:
     _refresh_deducted_profit_ratio(metrics)
     if revenue is not None:
         metrics["latest_revenue"] = revenue
+    _fill_revenue_cagr(metrics, revenue_series)
     if metrics.get("gross_margin") is None and gross_margin is not None:
         metrics["gross_margin"] = gross_margin
         metrics["gross_margin_series"] = [gross_margin]
@@ -546,6 +551,23 @@ def _fill_normalized_profit_factor(metrics: dict, profit_series: list[float]) ->
     metrics["normalized_profit_latest"] = latest
     metrics["normalized_profit_mean"] = mean_profit
     metrics["source_columns"]["normalized_factor"] = "stock_financial_abstract:年度归母净利润"
+
+
+def _fill_revenue_cagr(metrics: dict, revenue_series: list[float]) -> None:
+    values = [float(v) for v in revenue_series if v is not None and not np.isnan(float(v))]
+    if values:
+        metrics["revenue_series"] = values
+        metrics["revenue_years"] = len(values)
+        metrics["source_columns"]["revenue_series"] = "stock_financial_abstract:年度营业总收入"
+    if len(values) < 5:
+        return
+    latest = values[0]
+    earliest = values[-1]
+    periods = len(values) - 1
+    if latest <= 0 or earliest <= 0 or periods <= 0:
+        return
+    metrics["revenue_cagr"] = (latest / earliest) ** (1 / periods) - 1
+    metrics["source_columns"]["revenue_cagr"] = "stock_financial_abstract:年度营业总收入CAGR"
 
 
 def _fill_normalized_pe(metrics: dict) -> None:
