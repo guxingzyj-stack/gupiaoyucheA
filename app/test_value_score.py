@@ -15,6 +15,7 @@ from analysis.fundamental import (
     _fill_quality_from_abstract,
     _fill_quality_from_indicator,
 )
+from analysis.value_pipeline import annotate_signal_conflict
 from analysis.value_score import evaluate_value
 
 
@@ -91,6 +92,43 @@ def test_value_trap_combo():
     assert all(flag["severity"] == "warn" for flag in result["red_flags"])
     assert result["combo"] == "便宜但存疑"
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 0
+
+
+def test_signal_conflict_true_for_buy_with_r2_warn_flag():
+    result = evaluate_value(
+        "000014",
+        base_stock(),
+        base_fundamental(pe=8, pb=0.8),
+        base_metrics(revenue_growth=-5, profit_growth=-1),
+    )
+    assert any(
+        flag.get("code") == "R2" and flag.get("severity") == "warn"
+        for flag in result["red_flags"]
+    )
+
+    annotated = annotate_signal_conflict(
+        result,
+        {"rating": "买入", "total_score": 70},
+    )
+
+    assert annotated["conflict_with_signal"] is True
+
+
+def test_signal_conflict_false_without_warn_flag():
+    result = evaluate_value(
+        "000015",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(),
+    )
+    assert not any(flag.get("severity") == "warn" for flag in result["red_flags"])
+
+    annotated = annotate_signal_conflict(
+        result,
+        {"rating": "买入", "total_score": 70},
+    )
+
+    assert annotated["conflict_with_signal"] is False
 
 
 def test_valuation_percentile_used_in_v1():
@@ -274,6 +312,8 @@ def run_all():
     test_missing_gate()
     test_profit_up_revenue_down_red_flag()
     test_value_trap_combo()
+    test_signal_conflict_true_for_buy_with_r2_warn_flag()
+    test_signal_conflict_false_without_warn_flag()
     test_valuation_percentile_used_in_v1()
     test_missing_valuation_percentile_does_not_block_gate()
     test_non_core_quality_missing_does_not_block_gate()
