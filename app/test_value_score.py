@@ -119,6 +119,18 @@ def test_low_cashflow_scores_zero():
     assert "偏弱" in result["quality"]["dimensions"]["Q2_cashflow"]["why"]
 
 
+def test_roe_without_history_cannot_score_full():
+    result = evaluate_value(
+        "000009",
+        base_stock(),
+        base_fundamental(roe=18),
+        base_metrics(roe=18, roe_series=[]),
+    )
+    q1 = result["quality"]["dimensions"]["Q1_roe"]
+    assert q1["score"] == 1
+    assert "缺历史序列" in q1["why"]
+
+
 def test_cashflow_percent_column_always_divides_by_100():
     metrics = {"source_columns": {}}
     df = pd.DataFrame({
@@ -193,6 +205,7 @@ def run_all():
     test_value_trap_combo()
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
+    test_roe_without_history_cannot_score_full()
     test_cashflow_percent_column_always_divides_by_100()
     test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
     test_tier_boundaries()

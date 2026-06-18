@@ -222,7 +222,9 @@ def _score_roe(data: dict) -> dict:
     series = _valid_series(data.get("roe_series"))
     if roe is None:
         return {"score": 0, "why": "ROE缺失"}
-    if roe >= 15 and (not series or min(series[:3]) >= 8) and _series_std(series[:5]) <= 6:
+    if roe >= 15 and not series:
+        return {"score": 1, "why": f"ROE {roe:.1f}%，但缺历史序列，稳定性未确认"}
+    if roe >= 15 and min(series[:3]) >= 8 and _series_std(series[:5]) <= 6:
         return {"score": 2, "why": f"ROE {roe:.1f}% 且近年较稳定"}
     if roe >= 8:
         return {"score": 1, "why": f"ROE {roe:.1f}% 达到可接受区间"}
