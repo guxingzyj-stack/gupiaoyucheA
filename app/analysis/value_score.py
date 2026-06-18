@@ -144,7 +144,8 @@ def _score_valuation(data: dict, industry_kind: str, quality: dict, red_flags: l
         "V2_vs_quality": _score_quality_price_match(data, industry_kind, quality),
         "V3_yield": _score_yield(data),
     }
-    if any(flag["code"] == "R2" for flag in red_flags):
+    has_r2 = any(flag["code"] == "R2" for flag in red_flags)
+    if has_r2:
         dimensions["V1_history"] = {
             "score": 0,
             "why": "便宜来自收入下滑阶段，便宜项暂不计正面",
@@ -152,7 +153,7 @@ def _score_valuation(data: dict, industry_kind: str, quality: dict, red_flags: l
     score = min(6, sum(item["score"] for item in dimensions.values()))
     return {
         "score": score,
-        "tier": _valuation_tier(score),
+        "tier": "便宜存疑" if has_r2 else _valuation_tier(score),
         "dimensions": dimensions,
     }
 

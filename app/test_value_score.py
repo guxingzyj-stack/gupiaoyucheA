@@ -95,6 +95,7 @@ def test_value_trap_combo():
     assert any(flag["code"] == "R2" for flag in result["red_flags"])
     assert all(flag["severity"] == "warn" for flag in result["red_flags"])
     assert result["combo"] == "便宜但存疑"
+    assert result["valuation"]["tier"] == "便宜存疑"
     assert result["valuation"]["dimensions"]["V1_history"]["score"] == 0
 
 
