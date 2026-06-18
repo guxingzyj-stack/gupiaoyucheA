@@ -105,7 +105,11 @@ def _fetch_financial_indicators(result: dict, symbol: str):
             col = _find_column(df, candidates=candidates, keywords=keywords)
             if not col:
                 continue
-            val = _latest_notna(_numeric_series(df[col]))
+            if field == "roe":
+                annual_series = _annual_indicator_series(df, col)
+                val = float(annual_series.iloc[0]) if not annual_series.empty else None
+            else:
+                val = _latest_notna(_numeric_series(df[col]))
             if val is not None:
                 result[field] = val
 
@@ -209,7 +213,13 @@ def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
                 metrics[field] = float(annual_series.iloc[0])
                 metrics[f"{field}_series"] = annual_series.head(5).tolist()
                 metrics["source_columns"][field] = f"{col}:年度"
-        elif field in ("roe", "gross_margin"):
+        elif field == "roe":
+            annual_series = _annual_indicator_series(df, col)
+            if not annual_series.empty:
+                metrics[field] = float(annual_series.iloc[0])
+                metrics[f"{field}_series"] = annual_series.head(5).tolist()
+                metrics["source_columns"][field] = f"{col}:年度"
+        elif field == "gross_margin":
             metrics[field] = latest
             metrics[f"{field}_series"] = series.dropna().head(5).tolist()
         else:

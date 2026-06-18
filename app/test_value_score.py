@@ -261,6 +261,26 @@ def test_roe_without_history_cannot_score_full():
     assert "缺历史序列" in q1["why"]
 
 
+def test_roe_uses_annual_series_for_quality_score():
+    metrics = {"source_columns": {}}
+    df = pd.DataFrame({
+        "日期": ["2026-03-31", "2025-12-31", "2024-12-31", "2023-12-31"],
+        "净资产收益率(%)": [5.46, 22.0, 18.0, 16.0],
+    })
+    _fill_quality_from_indicator(metrics, df)
+
+    result = evaluate_value(
+        "000019",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(roe=metrics["roe"], roe_series=metrics["roe_series"]),
+    )
+
+    assert metrics["roe"] == 22.0
+    assert metrics["roe_series"] == [22.0, 18.0, 16.0]
+    assert result["quality"]["dimensions"]["Q1_roe"]["score"] == 2
+
+
 def test_cashflow_uses_annual_ratio_without_percent_division():
     metrics = {"source_columns": {}}
     df = pd.DataFrame({
@@ -283,10 +303,10 @@ def test_cashflow_uses_annual_ratio_without_percent_division():
 def test_fetch_financial_indicators_uses_shared_growth_columns():
     previous = sys.modules.get("akshare")
     fake_df = pd.DataFrame({
-        "日期": ["2025-12-31"],
-        "净资产收益率(%)": [15],
-        "主营业务收入增长率(%)": [12],
-        "净利润增长率(%)": [8],
+        "日期": ["2026-03-31", "2025-12-31"],
+        "净资产收益率(%)": [5, 22],
+        "主营业务收入增长率(%)": [12, 9],
+        "净利润增长率(%)": [8, 7],
     })
     sys.modules["akshare"] = types.SimpleNamespace(
         stock_financial_analysis_indicator=lambda symbol, start_year="2021": fake_df
@@ -300,7 +320,7 @@ def test_fetch_financial_indicators_uses_shared_growth_columns():
         else:
             sys.modules["akshare"] = previous
 
-    assert result["roe"] == 15
+    assert result["roe"] == 22
     assert result["revenue_growth"] == 12
     assert result["profit_growth"] == 8
 
@@ -576,6 +596,7 @@ def run_all():
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
     test_roe_without_history_cannot_score_full()
+    test_roe_uses_annual_series_for_quality_score()
     test_cashflow_uses_annual_ratio_without_percent_division()
     test_fetch_financial_indicators_uses_shared_growth_columns()
     test_stock_info_industry_fallback_from_individual_info()
