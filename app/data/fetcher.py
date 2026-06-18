@@ -42,6 +42,9 @@ _MARKET_MAP = {
     "9": "1",
 }
 
+_INDUSTRY_CACHE_FILE = os.path.join(config.CACHE_DIR, "industry_cache.json")
+_INDUSTRY_FALLBACK_FILE = os.path.join(os.path.dirname(__file__), "industry_fallback.json")
+
 
 def _cache_path(key: str) -> str:
     h = hashlib.md5(key.encode()).hexdigest()[:12]
@@ -102,8 +105,27 @@ def _non_empty(value) -> str:
 
 def _fill_industry_fallback(info: dict, symbol: str) -> None:
     """为行业字段做保守兜底：取不到就保持空值，不编造。"""
-    if _non_empty(info.get("所属行业")):
+    industry, source = _fetch_live_industry(info, symbol)
+    if industry:
+        live_source = source if str(source).startswith("live:") else f"live:{source}"
+        _apply_industry(info, industry, live_source)
+        _save_persistent_industry(symbol, industry, live_source)
         return
+
+    cached = _get_persistent_industry(symbol)
+    if cached:
+        _apply_industry(info, cached, "persistent_cache")
+        return
+
+    mapped = _get_fallback_industry(symbol)
+    if mapped:
+        _apply_industry(info, mapped, "fallback_map")
+
+
+def _fetch_live_industry(info: dict, symbol: str) -> tuple[str, str]:
+    current = _non_empty(info.get("所属行业"))
+    if current:
+        return current, info.get("industry_source") or "f10_orgprofile"
 
     try:
         import akshare as ak
@@ -118,16 +140,76 @@ def _fill_industry_fallback(info: dict, symbol: str) -> None:
                     if "行业" in name:
                         industry = _non_empty(row.get(value_col))
                         if industry:
-                            info["所属行业"] = industry
-                            info["industry_source"] = "stock_individual_info_em"
-                            return
+                            return industry, "stock_individual_info_em"
     except Exception as exc:
         _logger.warning("AKShare行业兜底失败 %s: %s", symbol, exc)
 
     industry = _fetch_industry_from_quote_board(symbol)
     if industry:
-        info["所属行业"] = industry
-        info["industry_source"] = "eastmoney_quote_f127"
+        return industry, "eastmoney_quote_f127"
+    return "", ""
+
+
+def _apply_industry(info: dict, industry: str, source: str) -> None:
+    info["所属行业"] = industry
+    info["industry"] = industry
+    info["industry_source"] = source
+
+
+def _load_industry_cache() -> dict:
+    return _load_json_dict(_INDUSTRY_CACHE_FILE)
+
+
+def _save_industry_cache(cache: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_INDUSTRY_CACHE_FILE), exist_ok=True)
+        with open(_INDUSTRY_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        _logger.warning("行业持久化缓存写入失败: %s", exc)
+
+
+def _save_persistent_industry(symbol: str, industry: str, source: str) -> None:
+    industry = _non_empty(industry)
+    if not industry:
+        return
+    cache = _load_industry_cache()
+    cache[str(symbol)] = {
+        "industry": industry,
+        "source": source,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _save_industry_cache(cache)
+
+
+def _get_persistent_industry(symbol: str) -> str:
+    entry = _load_industry_cache().get(str(symbol))
+    if isinstance(entry, dict):
+        return _non_empty(entry.get("industry"))
+    return _non_empty(entry)
+
+
+def _load_industry_fallback_map() -> dict:
+    return _load_json_dict(_INDUSTRY_FALLBACK_FILE)
+
+
+def _get_fallback_industry(symbol: str) -> str:
+    entry = _load_industry_fallback_map().get(str(symbol))
+    if isinstance(entry, dict):
+        return _non_empty(entry.get("industry"))
+    return _non_empty(entry)
+
+
+def _load_json_dict(path: str) -> dict:
+    try:
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        _logger.warning("JSON缓存读取失败 %s: %s", path, exc)
+        return {}
 
 
 def _find_info_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
@@ -259,7 +341,12 @@ def fetch_stock_info(symbol: str) -> dict:
 
     if _cache_valid(json_path, hours=12) and os.path.exists(json_path):
         with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            info = json.load(f)
+        if not _non_empty(info.get("所属行业")) or not _non_empty(info.get("industry")):
+            _fill_industry_fallback(info, symbol)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(info, f, ensure_ascii=False)
+        return info
 
     info = {}
 

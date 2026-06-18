@@ -9,6 +9,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import data.fetcher as fetcher
 from data.fetcher import _fill_industry_fallback
 from analysis.fundamental import (
     _compute_percentile,
@@ -284,7 +285,74 @@ def test_stock_info_industry_fallback_from_individual_info():
             sys.modules["akshare"] = previous
 
     assert info["所属行业"] == "银行"
-    assert info["industry_source"] == "stock_individual_info_em"
+    assert info["industry"] == "银行"
+    assert info["industry_source"] == "live:stock_individual_info_em"
+
+
+def test_industry_fallback_uses_persistent_cache_when_live_empty():
+    old_live = fetcher._fetch_live_industry
+    old_cache = fetcher._load_industry_cache
+    old_map = fetcher._load_industry_fallback_map
+    try:
+        fetcher._fetch_live_industry = lambda info, symbol: ("", "")
+        fetcher._load_industry_cache = lambda: {
+            "600036": {"industry": "银行", "source": "live:f10_orgprofile"}
+        }
+        fetcher._load_industry_fallback_map = lambda: {}
+
+        info = {}
+        _fill_industry_fallback(info, "600036")
+    finally:
+        fetcher._fetch_live_industry = old_live
+        fetcher._load_industry_cache = old_cache
+        fetcher._load_industry_fallback_map = old_map
+
+    assert info["所属行业"] == "银行"
+    assert info["industry"] == "银行"
+    assert info["industry_source"] == "persistent_cache"
+
+
+def test_industry_fallback_uses_map_when_live_and_cache_empty():
+    old_live = fetcher._fetch_live_industry
+    old_cache = fetcher._load_industry_cache
+    old_map = fetcher._load_industry_fallback_map
+    try:
+        fetcher._fetch_live_industry = lambda info, symbol: ("", "")
+        fetcher._load_industry_cache = lambda: {}
+        fetcher._load_industry_fallback_map = lambda: {
+            "601398": {"industry": "银行", "source": "manual_verified"}
+        }
+
+        info = {}
+        _fill_industry_fallback(info, "601398")
+    finally:
+        fetcher._fetch_live_industry = old_live
+        fetcher._load_industry_cache = old_cache
+        fetcher._load_industry_fallback_map = old_map
+
+    assert info["所属行业"] == "银行"
+    assert info["industry"] == "银行"
+    assert info["industry_source"] == "fallback_map"
+
+
+def test_industry_fallback_leaves_empty_without_live_cache_or_map():
+    old_live = fetcher._fetch_live_industry
+    old_cache = fetcher._load_industry_cache
+    old_map = fetcher._load_industry_fallback_map
+    try:
+        fetcher._fetch_live_industry = lambda info, symbol: ("", "")
+        fetcher._load_industry_cache = lambda: {}
+        fetcher._load_industry_fallback_map = lambda: {}
+
+        info = {}
+        _fill_industry_fallback(info, "999999")
+    finally:
+        fetcher._fetch_live_industry = old_live
+        fetcher._load_industry_cache = old_cache
+        fetcher._load_industry_fallback_map = old_map
+
+    assert "所属行业" not in info
+    assert "industry_source" not in info
 
 
 def test_gross_margin_fallback_from_abstract_revenue_cost():
@@ -394,6 +462,9 @@ def run_all():
     test_cashflow_percent_column_always_divides_by_100()
     test_fetch_financial_indicators_uses_shared_growth_columns()
     test_stock_info_industry_fallback_from_individual_info()
+    test_industry_fallback_uses_persistent_cache_when_live_empty()
+    test_industry_fallback_uses_map_when_live_and_cache_empty()
+    test_industry_fallback_leaves_empty_without_live_cache_or_map()
     test_gross_margin_fallback_from_abstract_revenue_cost()
     test_bank_moat_uses_neutral_score()
     test_bank_risk_metrics_from_abstract_feed_q5()
