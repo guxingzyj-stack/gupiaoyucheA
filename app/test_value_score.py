@@ -115,6 +115,17 @@ def test_missing_valuation_percentile_does_not_block_gate():
     assert any("历史 PE/PB 分位缺失" in item for item in result["open_questions"])
 
 
+def test_non_core_quality_missing_does_not_block_gate():
+    result = evaluate_value(
+        "000013",
+        base_stock(),
+        base_fundamental(),
+        base_metrics(missing_fields=["毛利率"]),
+    )
+    assert result["gate"]["passed"] is True
+    assert "毛利率" in result["details"]["missing_fields"]
+
+
 def test_bank_branch_uses_pb_roe():
     result = evaluate_value(
         "600000",
@@ -265,6 +276,7 @@ def run_all():
     test_value_trap_combo()
     test_valuation_percentile_used_in_v1()
     test_missing_valuation_percentile_does_not_block_gate()
+    test_non_core_quality_missing_does_not_block_gate()
     test_bank_branch_uses_pb_roe()
     test_low_cashflow_scores_zero()
     test_roe_without_history_cannot_score_full()

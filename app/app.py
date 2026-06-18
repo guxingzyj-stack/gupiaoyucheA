@@ -825,6 +825,14 @@ def run_analysis(symbol, years, do_backtest, fast_mode=True):
         from models.scorer import compute_score
         r["score_result"] = compute_score(r["signals"], r["fundamental"], r["sentiment"], short_pred, long_pred)
 
+        prog.progress(89, "价值体检...")
+        try:
+            from analysis.value_pipeline import build_value_assessment, annotate_signal_conflict
+            r["value_assessment"] = build_value_assessment(symbol, stock_info, r["fundamental"])
+            annotate_signal_conflict(r["value_assessment"], r["score_result"])
+        except Exception as e:
+            print(f"[价值体检失败] {e}")
+
         prog.progress(90, "保存历史...")
         try:
             from data.score_history import save_score, load_history

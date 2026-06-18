@@ -207,6 +207,16 @@ def run_analysis(symbol: str, lang: str, do_backtest: bool, open_browser: bool,
     from models.scorer import compute_score
     score_result = compute_score(signals, fundamental, sentiment, short_pred, long_pred)
 
+    try:
+        from analysis.value_pipeline import build_value_assessment, annotate_signal_conflict
+        value_assessment = build_value_assessment(symbol, stock_info, fundamental)
+        annotate_signal_conflict(value_assessment, score_result)
+        if value_assessment:
+            result["value_assessment"] = value_assessment
+            _ok(console, f"价值体检：{value_assessment.get('combo', '已生成')}")
+    except Exception as e:
+        _warn(console, f"价值体检失败: {e}")
+
     score  = score_result["total_score"]
     rating = score_result["rating"]
     color  = score_result["color"]

@@ -80,6 +80,7 @@ REPORT_USE_PRETRAINED_MODELS = True
 REPORT_RETRAIN_IF_MISSING = True
 XGB_USE_BAYES_IN_REPORT = False
 ONLINE_XGB_USE_BAYES = False
+SHOW_VALUE_ASSESSMENT = True
 
 # ── 多核 CPU 利用 ──────────────────────────────────────────
 # 设计原则：避免嵌套并行的 oversubscription

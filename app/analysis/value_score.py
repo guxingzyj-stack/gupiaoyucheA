@@ -24,7 +24,6 @@ BANK_REQUIRED_FIELDS = {
 BANK_KEYWORDS = ("银行",)
 HEAVY_ASSET_KEYWORDS = ("钢铁", "水泥", "煤炭", "有色", "化工", "航运", "电力", "地产")
 CYCLICAL_KEYWORDS = ("钢铁", "水泥", "煤炭", "有色", "化工", "航运")
-OPTIONAL_GATE_MISSING_FIELDS = {"PE历史分位", "PB历史分位"}
 
 
 def evaluate_value(
@@ -101,10 +100,6 @@ def evaluate_value(
 def _build_gate(data: dict, industry_kind: str, quality_metrics: dict) -> dict:
     required = BANK_REQUIRED_FIELDS if industry_kind == "bank" else GENERAL_REQUIRED_FIELDS
     missing = [label for key, label in required.items() if data.get(key) is None]
-    missing.extend(
-        label for label in quality_metrics.get("missing_fields", [])
-        if label not in OPTIONAL_GATE_MISSING_FIELDS
-    )
     missing = sorted(set(missing))
     passed = len(missing) == 0
     return {
