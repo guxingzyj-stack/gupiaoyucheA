@@ -13,14 +13,26 @@ import data.fetcher as fetcher
 from data.fetcher import _fill_industry_fallback
 from analysis.fundamental import (
     _compute_percentile,
+    _clear_fetch_cache as _clear_fundamental_fetch_cache,
     _fetch_dividend_yield_fallback,
     _fetch_financial_indicators,
     _fill_normalized_pe,
     _fill_quality_from_abstract,
     _fill_quality_from_indicator,
+    fetch_and_analyze,
+    fetch_quality_metrics,
 )
 from analysis.value_pipeline import annotate_signal_conflict
 from analysis.value_score import evaluate_value
+
+
+def clear_fetch_caches():
+    _clear_fundamental_fetch_cache()
+    fetcher._clear_fetch_cache()
+
+
+def setup_function(function):
+    clear_fetch_caches()
 
 
 def base_stock(**overrides):
@@ -372,6 +384,45 @@ def test_fetch_financial_indicators_uses_shared_growth_columns():
     assert result["profit_growth"] == 8
 
 
+def test_fetch_and_quality_metrics_share_indicator_cache():
+    previous = sys.modules.get("akshare")
+    calls = {"indicator": 0}
+    fake_df = pd.DataFrame({
+        "日期": ["2026-03-31", "2025-12-31"],
+        "净资产收益率(%)": [5, 22],
+        "主营业务收入增长率(%)": [12, 9],
+        "净利润增长率(%)": [8, 7],
+        "经营现金净流量与净利润的比率(%)": [1.1, 1.2],
+    })
+    fake_abstract = pd.DataFrame({
+        "指标": ["归母净利润", "营业总收入"],
+        "20251231": [100, 200],
+        "20241231": [90, 180],
+        "20231231": [80, 160],
+        "20221231": [70, 140],
+        "20211231": [60, 120],
+    })
+
+    def fake_indicator(symbol, start_year="2021"):
+        calls["indicator"] += 1
+        return fake_df
+
+    sys.modules["akshare"] = types.SimpleNamespace(
+        stock_financial_analysis_indicator=fake_indicator,
+        stock_financial_abstract=lambda symbol: fake_abstract,
+    )
+    try:
+        fetch_and_analyze("000010", {})
+        fetch_quality_metrics("000010")
+    finally:
+        if previous is None:
+            sys.modules.pop("akshare", None)
+        else:
+            sys.modules["akshare"] = previous
+
+    assert calls["indicator"] == 1
+
+
 def test_stock_info_industry_fallback_from_individual_info():
     previous = sys.modules.get("akshare")
     fake_df = pd.DataFrame({
@@ -393,6 +444,38 @@ def test_stock_info_industry_fallback_from_individual_info():
     assert info["所属行业"] == "银行"
     assert info["industry"] == "银行"
     assert info["industry_source"] == "live:stock_individual_info_em"
+
+
+def test_stock_info_industry_live_lookup_uses_memory_cache():
+    previous = sys.modules.get("akshare")
+    old_save = fetcher._save_persistent_industry
+    calls = {"individual": 0}
+    fake_df = pd.DataFrame({
+        "item": ["总市值", "行业"],
+        "value": ["100亿", "银行"],
+    })
+
+    def fake_individual(symbol):
+        calls["individual"] += 1
+        return fake_df
+
+    sys.modules["akshare"] = types.SimpleNamespace(stock_individual_info_em=fake_individual)
+    try:
+        fetcher._save_persistent_industry = lambda symbol, industry, source: None
+        info_a = {}
+        info_b = {}
+        _fill_industry_fallback(info_a, "600036")
+        _fill_industry_fallback(info_b, "600036")
+    finally:
+        fetcher._save_persistent_industry = old_save
+        if previous is None:
+            sys.modules.pop("akshare", None)
+        else:
+            sys.modules["akshare"] = previous
+
+    assert calls["individual"] == 1
+    assert info_a["所属行业"] == "银行"
+    assert info_b["所属行业"] == "银行"
 
 
 def test_industry_fallback_uses_persistent_cache_when_live_empty():
@@ -694,43 +777,50 @@ def test_tier_boundaries():
 
 
 def run_all():
-    test_missing_gate()
-    test_profit_up_revenue_down_red_flag()
-    test_value_trap_combo()
-    test_value_trap_uses_multi_year_revenue_downtrend()
-    test_value_trap_ignores_single_year_drop_when_multi_year_revenue_grows()
-    test_value_trap_does_not_flag_slight_positive_revenue_cagr()
-    test_signal_conflict_true_for_buy_with_r2_warn_flag()
-    test_signal_conflict_false_without_warn_flag()
-    test_valuation_percentile_used_in_v1()
-    test_missing_valuation_percentile_does_not_block_gate()
-    test_non_core_quality_missing_does_not_block_gate()
-    test_bank_branch_uses_pb_roe()
-    test_low_cashflow_scores_zero()
-    test_roe_without_history_cannot_score_full()
-    test_roe_uses_annual_series_for_quality_score()
-    test_cashflow_uses_annual_ratio_without_percent_division()
-    test_dividend_yield_fallback_from_baidu_valuation()
-    test_dividend_yield_fallback_from_fhps_ratio_column()
-    test_fetch_financial_indicators_uses_shared_growth_columns()
-    test_stock_info_industry_fallback_from_individual_info()
-    test_industry_fallback_uses_persistent_cache_when_live_empty()
-    test_industry_fallback_uses_map_when_live_and_cache_empty()
-    test_industry_fallback_leaves_empty_without_live_cache_or_map()
-    test_gross_margin_fallback_from_abstract_revenue_cost()
-    test_bank_moat_uses_neutral_score()
-    test_bank_risk_metrics_from_abstract_feed_q5()
-    test_normalized_pe_from_annual_profit_series()
-    test_revenue_cagr_from_annual_revenue_series()
-    test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe()
-    test_cyclical_low_profit_uses_lower_normalized_pe()
-    test_cyclical_missing_normalized_pe_adds_open_question()
-    test_quality_price_match_uses_profit_cagr_peg_boundaries()
-    test_quality_price_match_uses_roe_anchor_when_peg_is_high()
-    test_quality_price_match_uses_roe_when_profit_history_cagr_invalid()
-    test_compute_percentile_filters_invalid_values()
-    test_deducted_profit_ratio_uses_indicator_and_abstract_fallback()
-    test_tier_boundaries()
+    tests = [
+        test_missing_gate,
+        test_profit_up_revenue_down_red_flag,
+        test_value_trap_combo,
+        test_value_trap_uses_multi_year_revenue_downtrend,
+        test_value_trap_ignores_single_year_drop_when_multi_year_revenue_grows,
+        test_value_trap_does_not_flag_slight_positive_revenue_cagr,
+        test_signal_conflict_true_for_buy_with_r2_warn_flag,
+        test_signal_conflict_false_without_warn_flag,
+        test_valuation_percentile_used_in_v1,
+        test_missing_valuation_percentile_does_not_block_gate,
+        test_non_core_quality_missing_does_not_block_gate,
+        test_bank_branch_uses_pb_roe,
+        test_low_cashflow_scores_zero,
+        test_roe_without_history_cannot_score_full,
+        test_roe_uses_annual_series_for_quality_score,
+        test_cashflow_uses_annual_ratio_without_percent_division,
+        test_dividend_yield_fallback_from_baidu_valuation,
+        test_dividend_yield_fallback_from_fhps_ratio_column,
+        test_fetch_financial_indicators_uses_shared_growth_columns,
+        test_fetch_and_quality_metrics_share_indicator_cache,
+        test_stock_info_industry_fallback_from_individual_info,
+        test_stock_info_industry_live_lookup_uses_memory_cache,
+        test_industry_fallback_uses_persistent_cache_when_live_empty,
+        test_industry_fallback_uses_map_when_live_and_cache_empty,
+        test_industry_fallback_leaves_empty_without_live_cache_or_map,
+        test_gross_margin_fallback_from_abstract_revenue_cost,
+        test_bank_moat_uses_neutral_score,
+        test_bank_risk_metrics_from_abstract_feed_q5,
+        test_normalized_pe_from_annual_profit_series,
+        test_revenue_cagr_from_annual_revenue_series,
+        test_cyclical_high_profit_uses_normalized_pe_not_raw_low_pe,
+        test_cyclical_low_profit_uses_lower_normalized_pe,
+        test_cyclical_missing_normalized_pe_adds_open_question,
+        test_quality_price_match_uses_profit_cagr_peg_boundaries,
+        test_quality_price_match_uses_roe_anchor_when_peg_is_high,
+        test_quality_price_match_uses_roe_when_profit_history_cagr_invalid,
+        test_compute_percentile_filters_invalid_values,
+        test_deducted_profit_ratio_uses_indicator_and_abstract_fallback,
+        test_tier_boundaries,
+    ]
+    for test in tests:
+        clear_fetch_caches()
+        test()
     print("test_value_score passed")
 
 

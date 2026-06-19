@@ -6,6 +6,7 @@ import os
 import json
 import logging
 import hashlib
+import time
 import warnings
 from datetime import datetime, timedelta
 from typing import Optional
@@ -44,6 +45,32 @@ _MARKET_MAP = {
 
 _INDUSTRY_CACHE_FILE = os.path.join(config.CACHE_DIR, "industry_cache.json")
 _INDUSTRY_FALLBACK_FILE = os.path.join(os.path.dirname(__file__), "industry_fallback.json")
+_FETCH_CACHE = {}
+_FETCH_TTL = 6 * 3600
+
+
+def _has_real_value(value) -> bool:
+    if value is None:
+        return False
+    if hasattr(value, "empty"):
+        return not bool(value.empty)
+    return True
+
+
+def _cached_fetch(key, fn):
+    hit = _FETCH_CACHE.get(key)
+    now = time.time()
+    if hit and now - hit[1] < _FETCH_TTL:
+        return hit[0]
+
+    val = fn()
+    if _has_real_value(val):
+        _FETCH_CACHE[key] = (val, now)
+    return val
+
+
+def _clear_fetch_cache():
+    _FETCH_CACHE.clear()
 
 
 def _cache_path(key: str) -> str:
@@ -128,19 +155,9 @@ def _fetch_live_industry(info: dict, symbol: str) -> tuple[str, str]:
         return current, info.get("industry_source") or "f10_orgprofile"
 
     try:
-        import akshare as ak
-
-        df = ak.stock_individual_info_em(symbol=symbol)
-        if df is not None and not df.empty:
-            key_col = _find_info_column(df, ("item", "指标", "项目", "key"))
-            value_col = _find_info_column(df, ("value", "值", "内容", "数据"))
-            if key_col and value_col:
-                for _, row in df.iterrows():
-                    name = str(row.get(key_col, ""))
-                    if "行业" in name:
-                        industry = _non_empty(row.get(value_col))
-                        if industry:
-                            return industry, "stock_individual_info_em"
+        result = _cached_fetch(("industry_individual", symbol), lambda: _fetch_individual_info_industry(symbol))
+        if result:
+            return result
     except Exception as exc:
         _logger.warning("AKShare行业兜底失败 %s: %s", symbol, exc)
 
@@ -148,6 +165,25 @@ def _fetch_live_industry(info: dict, symbol: str) -> tuple[str, str]:
     if industry:
         return industry, "eastmoney_quote_f127"
     return "", ""
+
+
+def _fetch_individual_info_industry(symbol: str) -> tuple[str, str] | None:
+    import akshare as ak
+
+    df = ak.stock_individual_info_em(symbol=symbol)
+    if df is None or df.empty:
+        return None
+    key_col = _find_info_column(df, ("item", "指标", "项目", "key"))
+    value_col = _find_info_column(df, ("value", "值", "内容", "数据"))
+    if not key_col or not value_col:
+        return None
+    for _, row in df.iterrows():
+        name = str(row.get(key_col, ""))
+        if "行业" in name:
+            industry = _non_empty(row.get(value_col))
+            if industry:
+                return industry, "stock_individual_info_em"
+    return None
 
 
 def _apply_industry(info: dict, industry: str, source: str) -> None:
