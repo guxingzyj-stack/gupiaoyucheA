@@ -850,14 +850,8 @@ def run_analysis(symbol, years, do_backtest, fast_mode=True):
         except:
             r["history"] = []
 
-        if do_backtest:
-            prog.progress(93, "执行回测...")
-            try:
-                from backtest.engine import run_backtest
-                r["backtest"] = run_backtest(df)
-            except: r["backtest"] = None
-        else:
-            r["backtest"] = None
+        r["backtest"] = None
+        r["backtest_requested"] = bool(do_backtest)
 
         prog.progress(97, "生成图表...")
         import traceback as _tb
@@ -2141,28 +2135,41 @@ with col_right:
                             st.link_button("打开第一条新闻原文", first_link, key=f"news_first_link_{sym}")
 
                 # ── 回测 ──────────────────────────────────────
-                bt = r.get("backtest")
-                if bt:
+                if r.get("backtest_requested", True):
                     st.subheader("⏱️ 策略回测")
-                    wr  = bt.get("win_rate", 0)
-                    ar  = bt.get("annual_return", 0)
-                    md  = bt.get("max_drawdown", 0)
-                    sr_ = bt.get("sharpe_ratio", 0)
-                    er  = bt.get("excess_return", 0)
-                    # 胜率/最大回撤/夏普：质量指标，绿=好 红=差
-                    wr_c  = "#22c55e" if wr>=0.55  else ("#FFA726" if wr>=0.45  else "#f44336")
-                    md_c  = "#22c55e" if abs(md)<=0.10 else ("#FFA726" if abs(md)<=0.20 else "#f44336")
-                    sr_c  = "#22c55e" if sr_>=1.5  else ("#4CAF50" if sr_>=1    else ("#FFA726" if sr_>=0 else "#f44336"))
-                    # 年化收益/超额收益：涨跌指标，A股 涨红跌绿
-                    ar_c  = "#EF5350" if ar>0  else ("#22c55e" if ar<0  else "#ADBAC7")
-                    er_c  = "#EF5350" if er>0  else ("#22c55e" if er<0  else "#ADBAC7")
-                    bc1,bc2,bc3,bc4,bc5 = st.columns(5)
-                    bc1.markdown(cmet("胜率",     f"{wr:.1%}", wr_c), unsafe_allow_html=True)
-                    bc2.markdown(cmet("年化收益", f"{ar:.1%}", ar_c), unsafe_allow_html=True)
-                    bc3.markdown(cmet("最大回撤", f"{md:.1%}", md_c), unsafe_allow_html=True)
-                    bc4.markdown(cmet("夏普比率", f"{sr_:.2f}", sr_c), unsafe_allow_html=True)
-                    bc5.markdown(cmet("超额收益", f"{er:+.1%}", er_c), unsafe_allow_html=True)
-                    st.caption(f"区间：{bt.get('period','')}  ·  共 {bt.get('total_trades',0)} 次交易")
+                    bt_key = f"backtest_{sym}"
+                    if st.button("运行回测", key=f"run_strategy_backtest_{sym}", width="stretch"):
+                        try:
+                            from backtest.engine import run_backtest
+                            with st.spinner("回测运行中，请稍候..."):
+                                st.session_state[bt_key] = run_backtest(r["df"])
+                        except Exception as exc:
+                            st.session_state.pop(bt_key, None)
+                            st.error(f"回测失败：{exc}")
+
+                    bt = st.session_state.get(bt_key)
+                    if bt:
+                        wr  = bt.get("win_rate", 0)
+                        ar  = bt.get("annual_return", 0)
+                        md  = bt.get("max_drawdown", 0)
+                        sr_ = bt.get("sharpe_ratio", 0)
+                        er  = bt.get("excess_return", 0)
+                        # 胜率/最大回撤/夏普：质量指标，绿=好 红=差
+                        wr_c  = "#22c55e" if wr>=0.55  else ("#FFA726" if wr>=0.45  else "#f44336")
+                        md_c  = "#22c55e" if abs(md)<=0.10 else ("#FFA726" if abs(md)<=0.20 else "#f44336")
+                        sr_c  = "#22c55e" if sr_>=1.5  else ("#4CAF50" if sr_>=1    else ("#FFA726" if sr_>=0 else "#f44336"))
+                        # 年化收益/超额收益：涨跌指标，A股 涨红跌绿
+                        ar_c  = "#EF5350" if ar>0  else ("#22c55e" if ar<0  else "#ADBAC7")
+                        er_c  = "#EF5350" if er>0  else ("#22c55e" if er<0  else "#ADBAC7")
+                        bc1,bc2,bc3,bc4,bc5 = st.columns(5)
+                        bc1.markdown(cmet("胜率",     f"{wr:.1%}", wr_c), unsafe_allow_html=True)
+                        bc2.markdown(cmet("年化收益", f"{ar:.1%}", ar_c), unsafe_allow_html=True)
+                        bc3.markdown(cmet("最大回撤", f"{md:.1%}", md_c), unsafe_allow_html=True)
+                        bc4.markdown(cmet("夏普比率", f"{sr_:.2f}", sr_c), unsafe_allow_html=True)
+                        bc5.markdown(cmet("超额收益", f"{er:+.1%}", er_c), unsafe_allow_html=True)
+                        st.caption(f"区间：{bt.get('period','')}  ·  共 {bt.get('total_trades',0)} 次交易")
+                    else:
+                        st.caption("回测未运行。需要验证策略历史表现时，点击上方按钮按需执行。")
 
                 # ── 支撑阻力 ──────────────────────────────────
                 sr_lv = r.get("sr", {})
