@@ -1353,27 +1353,28 @@ with col_right:
                         missing_fields = details.get("missing_fields", []) or []
                         source_columns = details.get("source_columns", {}) or {}
                         errors = details.get("errors", []) or []
-                        st.markdown("**取数透明度**")
-                        if missing_fields:
-                            st.caption("缺失字段：" + "、".join(str(item) for item in missing_fields))
-                        if errors:
-                            st.caption("取数异常：" + "；".join(str(item) for item in errors))
-                        if source_columns:
-                            source_rows = []
-                            for key, value in sorted(source_columns.items()):
-                                if isinstance(value, (list, tuple)):
-                                    value = "、".join(str(item) for item in value)
-                                elif isinstance(value, dict):
-                                    value = json.dumps(value, ensure_ascii=False)
-                                source_rows.append({"字段": key, "来源列": value})
-                            st.dataframe(
-                                pd.DataFrame(source_rows),
-                                hide_index=True,
-                                width="stretch",
-                                key=f"value_source_columns_{sym}",
-                            )
-                        elif not missing_fields and not errors:
-                            st.caption("暂无额外缺失或来源列记录")
+                        with st.expander("取数明细（调试用）", expanded=False):
+                            st.markdown("**取数透明度**")
+                            if missing_fields:
+                                st.caption("缺失字段：" + "、".join(str(item) for item in missing_fields))
+                            if errors:
+                                st.caption("取数异常：" + "；".join(str(item) for item in errors))
+                            if source_columns:
+                                source_rows = []
+                                for key, value in sorted(source_columns.items()):
+                                    if isinstance(value, (list, tuple)):
+                                        value = "、".join(str(item) for item in value)
+                                    elif isinstance(value, dict):
+                                        value = json.dumps(value, ensure_ascii=False)
+                                    source_rows.append({"字段": key, "来源列": value})
+                                st.dataframe(
+                                    pd.DataFrame(source_rows),
+                                    hide_index=True,
+                                    width="stretch",
+                                    key=f"value_source_columns_{sym}",
+                                )
+                            elif not missing_fields and not errors:
+                                st.caption("暂无额外缺失或来源列记录")
 
                 def _report_nrmse_score(nrmse_pct):
                     if nrmse_pct <= 2:
