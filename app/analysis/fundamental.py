@@ -2,8 +2,11 @@
 基本面分析模块
 通过 AKShare 获取财务指标并打分
 """
+import threading
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
 import pandas as pd
 
@@ -12,6 +15,7 @@ warnings.filterwarnings("ignore")
 VALUATION_PERIOD = "近十年"
 _FETCH_CACHE = {}
 _FETCH_TTL = 6 * 3600
+_FETCH_LOCK = threading.Lock()
 
 
 def _has_real_value(value) -> bool:
@@ -23,19 +27,34 @@ def _has_real_value(value) -> bool:
 
 
 def _cached_fetch(key, fn):
-    hit = _FETCH_CACHE.get(key)
-    now = time.time()
-    if hit and now - hit[1] < _FETCH_TTL:
-        return hit[0]
+    cached, found = _get_cached_value(key)
+    if found:
+        return cached
 
     val = fn()
-    if _has_real_value(val):
-        _FETCH_CACHE[key] = (val, now)
+    _store_cached_value(key, val)
     return val
 
 
 def _clear_fetch_cache():
-    _FETCH_CACHE.clear()
+    with _FETCH_LOCK:
+        _FETCH_CACHE.clear()
+
+
+def _get_cached_value(key):
+    now = time.time()
+    with _FETCH_LOCK:
+        hit = _FETCH_CACHE.get(key)
+        if hit and now - hit[1] < _FETCH_TTL:
+            return hit[0], True
+    return None, False
+
+
+def _store_cached_value(key, value):
+    if not _has_real_value(value):
+        return
+    with _FETCH_LOCK:
+        _FETCH_CACHE[key] = (value, time.time())
 
 
 def fetch_and_analyze(symbol: str, stock_info: dict) -> dict:
@@ -215,21 +234,71 @@ def fetch_quality_metrics(symbol: str) -> dict:
     except Exception as exc:
         metrics["errors"].append(f"财务指标获取失败: {exc}")
 
-    try:
-        abstract_df = _cached_fetch(
-            ("abstract", symbol),
-            lambda: ak.stock_financial_abstract(symbol=symbol),
-        )
-        if abstract_df is not None and not abstract_df.empty:
-            _fill_quality_from_abstract(metrics, abstract_df)
-    except Exception as exc:
+    fetched = _fetch_quality_network_inputs(symbol, ak)
+    abstract_df, exc = fetched.get("abstract", (None, None))
+    if exc:
         metrics["errors"].append(f"财务摘要获取失败: {exc}")
+    elif abstract_df is not None and not abstract_df.empty:
+        _fill_quality_from_abstract(metrics, abstract_df)
 
-    _fetch_valuation_percentiles(metrics, symbol, ak)
-    _fetch_dividend_yield_fallback(metrics, symbol, ak)
+    baidu_results = fetched.get("baidu", {})
+    _fetch_valuation_percentiles(metrics, symbol, ak, baidu_results=baidu_results)
+    _fetch_dividend_yield_fallback(metrics, symbol, ak, baidu_result=baidu_results.get("股息率"))
     _fill_normalized_pe(metrics)
     _mark_missing_quality_fields(metrics)
     return metrics
+
+
+def _fetch_quality_network_inputs(symbol: str, ak) -> dict:
+    tasks = {
+        "abstract": lambda: _fetch_abstract_df(symbol, ak),
+    }
+    baidu_fn = getattr(ak, "stock_zh_valuation_baidu", None)
+    _, dividend_cached = _get_cached_value(("dividend_yield", symbol))
+    if baidu_fn is not None:
+        tasks[("baidu", "市盈率(TTM)")] = lambda: _fetch_baidu_valuation_df(symbol, "市盈率(TTM)", ak)
+        tasks[("baidu", "市净率")] = lambda: _fetch_baidu_valuation_df(symbol, "市净率", ak)
+        if not dividend_cached:
+            tasks[("baidu", "股息率")] = lambda: _fetch_baidu_valuation_df(symbol, "股息率", ak)
+
+    results = {
+        "abstract": (None, None),
+        "baidu": {},
+    }
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {executor.submit(_safe_fetch, fn): key for key, fn in tasks.items()}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            value, exc = future.result()
+            if isinstance(key, tuple) and key[0] == "baidu":
+                results["baidu"][key[1]] = (value, exc)
+            else:
+                results[key] = (value, exc)
+    return results
+
+
+def _safe_fetch(fn):
+    try:
+        return fn(), None
+    except Exception as exc:
+        return None, exc
+
+
+def _fetch_abstract_df(symbol: str, ak):
+    return _cached_fetch(
+        ("abstract", symbol),
+        lambda: ak.stock_financial_abstract(symbol=symbol),
+    )
+
+
+def _fetch_baidu_valuation_df(symbol: str, indicator: str, ak):
+    fn = getattr(ak, "stock_zh_valuation_baidu", None)
+    if fn is None:
+        return None
+    return _cached_fetch(
+        ("baidu_valuation", symbol, indicator, VALUATION_PERIOD),
+        lambda: fn(symbol=symbol, indicator=indicator, period=VALUATION_PERIOD),
+    )
 
 
 def _fill_quality_from_indicator(metrics: dict, df: pd.DataFrame) -> None:
@@ -378,7 +447,7 @@ def _refresh_deducted_profit_ratio(metrics: dict) -> None:
     )
 
 
-def _fetch_valuation_percentiles(metrics: dict, symbol: str, ak) -> None:
+def _fetch_valuation_percentiles(metrics: dict, symbol: str, ak, baidu_results: dict | None = None) -> None:
     try:
         if _try_lg_valuation_percentiles(metrics, symbol, ak):
             _mark_missing_valuation_fields(metrics)
@@ -387,7 +456,7 @@ def _fetch_valuation_percentiles(metrics: dict, symbol: str, ak) -> None:
         metrics["errors"].append(f"乐咕历史估值获取失败: {exc}")
 
     try:
-        if _try_baidu_valuation_percentiles(metrics, symbol, ak):
+        if _try_baidu_valuation_percentiles(metrics, symbol, ak, baidu_results=baidu_results):
             _mark_missing_valuation_fields(metrics)
             return
     except Exception as exc:
@@ -424,9 +493,10 @@ def _try_lg_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
     return False
 
 
-def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
+def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak, baidu_results: dict | None = None) -> bool:
     fn = getattr(ak, "stock_zh_valuation_baidu", None)
-    if fn is None:
+    baidu_results = baidu_results or {}
+    if fn is None and not baidu_results:
         metrics["errors"].append("当前AKShare无stock_zh_valuation_baidu接口，历史估值缺失")
         return False
 
@@ -439,14 +509,18 @@ def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
         if metrics.get(field) is not None:
             updated = True
             continue
-        try:
-            df = _cached_fetch(
-                ("baidu_valuation", symbol, indicator, VALUATION_PERIOD),
-                lambda indicator=indicator: fn(symbol=symbol, indicator=indicator, period=VALUATION_PERIOD),
-            )
-        except Exception as exc:
-            metrics["errors"].append(f"百度{indicator}估值获取失败: {exc}")
-            continue
+        fetched = baidu_results.get(indicator)
+        if fetched is not None:
+            df, exc = fetched
+            if exc:
+                metrics["errors"].append(f"百度{indicator}估值获取失败: {exc}")
+                continue
+        else:
+            try:
+                df = _fetch_baidu_valuation_df(symbol, indicator, ak)
+            except Exception as exc:
+                metrics["errors"].append(f"百度{indicator}估值获取失败: {exc}")
+                continue
         if df is None or df.empty:
             metrics["errors"].append(f"百度{indicator}估值返回为空")
             continue
@@ -459,10 +533,13 @@ def _try_baidu_valuation_percentiles(metrics: dict, symbol: str, ak) -> bool:
     return updated
 
 
-def _fetch_dividend_yield_fallback(metrics: dict, symbol: str, ak) -> None:
+def _fetch_dividend_yield_fallback(metrics: dict, symbol: str, ak, baidu_result=None) -> None:
     if metrics.get("dividend_yield") is not None:
         return
-    result = _cached_fetch(("dividend_yield", symbol), lambda: _fetch_dividend_yield_result(symbol, ak))
+    result, found = _get_cached_value(("dividend_yield", symbol))
+    if not found:
+        result = _fetch_dividend_yield_result(symbol, ak, baidu_result=baidu_result)
+        _store_cached_value(("dividend_yield", symbol), result)
     if not result:
         return
     value, source = result
@@ -470,26 +547,28 @@ def _fetch_dividend_yield_fallback(metrics: dict, symbol: str, ak) -> None:
     metrics["source_columns"]["dividend_yield"] = source
 
 
-def _fetch_dividend_yield_result(symbol: str, ak):
+def _fetch_dividend_yield_result(symbol: str, ak, baidu_result=None):
     metrics = {"source_columns": {}}
-    if _try_baidu_dividend_yield(metrics, symbol, ak):
+    if _try_baidu_dividend_yield(metrics, symbol, ak, fetched=baidu_result):
         return metrics["dividend_yield"], metrics["source_columns"]["dividend_yield"]
     if _try_fhps_dividend_yield(metrics, symbol, ak):
         return metrics["dividend_yield"], metrics["source_columns"]["dividend_yield"]
     return None
 
 
-def _try_baidu_dividend_yield(metrics: dict, symbol: str, ak) -> bool:
+def _try_baidu_dividend_yield(metrics: dict, symbol: str, ak, fetched=None) -> bool:
     fn = getattr(ak, "stock_zh_valuation_baidu", None)
-    if fn is None:
+    if fn is None and fetched is None:
         return False
-    try:
-        df = _cached_fetch(
-            ("baidu_valuation", symbol, "股息率", VALUATION_PERIOD),
-            lambda: fn(symbol=symbol, indicator="股息率", period=VALUATION_PERIOD),
-        )
-    except Exception:
-        return False
+    if fetched is not None:
+        df, exc = fetched
+        if exc:
+            return False
+    else:
+        try:
+            df = _fetch_baidu_valuation_df(symbol, "股息率", ak)
+        except Exception:
+            return False
     if df is None or df.empty:
         return False
     value_col = _find_column(df, candidates=("value", "Value", "股息率", "估值"), keywords=("股息率",))
