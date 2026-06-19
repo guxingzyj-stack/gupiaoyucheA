@@ -24,7 +24,7 @@ ArchitecturesInstallIn64BitMode=x64
 
 [Files]
 Source: "..\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc,*.bak,*.bak2,.cache\*,online_models\*,performance_logs\*,prediction_logs\*,history\*,output\*,scheduler\*,watchlist.json"
-Source: "..\python\*"; DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
+Source: "..\python\*"; DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc,*.pdb,*.lib,*.a,*.h,tests\*,test\*,testing\*,*\tests\*,*\test\*,*\testing\*"
 Source: "..\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\launch.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\启动光环智能.bat"; DestDir: "{app}"; Flags: ignoreversion

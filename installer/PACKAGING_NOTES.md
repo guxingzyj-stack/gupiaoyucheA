@@ -17,7 +17,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\build_installer.ps1
 生成文件位置：
 
 ```text
-installer\光环智能股票预测系统_v2.2.4_Setup.exe
+installer\光环智能股票预测系统_v2.3.2_Setup.exe
 ```
 
 ## 安装包包含
@@ -40,6 +40,8 @@ installer\光环智能股票预测系统_v2.2.4_Setup.exe
 - app\watchlist.json
 - __pycache__
 - *.pyc
+- 第三方库测试目录 tests / test / testing
+- Python 开发/调试文件 *.pdb / *.lib / *.a / *.h
 - *.bak / *.bak2
 
 ## 用户数据
