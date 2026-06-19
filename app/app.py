@@ -752,46 +752,71 @@ def run_analysis(symbol, years, do_backtest, fast_mode=True):
     r = {"symbol": symbol, "ok": False}
     prog = st.progress(0, "初始化...")
     try:
-        prog.progress(5,  "获取历史行情...")
+        prog.progress(8, "并行取数中...")
+        from concurrent.futures import ThreadPoolExecutor
         from data.fetcher import fetch_stock_data, fetch_stock_info, get_stock_name, enrich_with_market_data
-        df         = fetch_stock_data(symbol, years=years)
-        stock_info = fetch_stock_info(symbol)
+        try:
+            from data.news import fetch_news, get_news_texts
+        except Exception:
+            fetch_news = get_news_texts = None
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            df_future = executor.submit(fetch_stock_data, symbol, years=years)
+            info_future = executor.submit(fetch_stock_info, symbol)
+            news_future = executor.submit(fetch_news, symbol) if fetch_news else None
+
+            df = df_future.result()
+            stock_info = info_future.result()
+            if news_future and get_news_texts:
+                try:
+                    news_list = news_future.result()
+                    news_texts = get_news_texts(news_list)
+                except Exception:
+                    news_list = news_texts = []
+            else:
+                news_list = news_texts = []
+
         stock_name = get_stock_name(symbol)
         r.update(stock_name=stock_name, stock_info=stock_info,
                  last_price=float(df["close"].iloc[-1]), trading_days=len(df))
-
-        prog.progress(12, "沪深300 + 资金流向...")
-        try: df = enrich_with_market_data(df, symbol)
-        except: pass
-
-        prog.progress(18, "获取新闻...")
-        try:
-            from data.news import fetch_news, get_news_texts
-            news_list  = fetch_news(symbol)
-            news_texts = get_news_texts(news_list)
-        except:
-            news_list = news_texts = []
         r["news_list"] = news_list
 
-        prog.progress(26, "计算技术指标...")
         from analysis.technical import compute_indicators, generate_signals, compute_support_resistance
-        df = compute_indicators(df)
-        r.update(df=df, signals=generate_signals(df), sr=compute_support_resistance(df))
 
-        prog.progress(36, "基本面分析...")
-        try:
-            from analysis.fundamental import fetch_and_analyze
-            r["fundamental"] = fetch_and_analyze(symbol, stock_info)
-        except:
-            r["fundamental"] = {"score": 50, "details": []}
+        def _prepare_indicators():
+            local_df = df
+            try:
+                local_df = enrich_with_market_data(local_df, symbol)
+            except Exception:
+                pass
+            local_df = compute_indicators(local_df)
+            return local_df, generate_signals(local_df), compute_support_resistance(local_df)
 
-        prog.progress(46, "情感分析...")
-        try:
-            from analysis.sentiment import analyze_sentiment
-            r["sentiment"] = analyze_sentiment(news_texts)
-        except:
-            r["sentiment"] = {"score":0.5,"label":"中性","positive_count":0,
-                               "negative_count":0,"neutral_count":0,"news_count":0}
+        def _prepare_fundamental():
+            try:
+                from analysis.fundamental import fetch_and_analyze
+                return fetch_and_analyze(symbol, stock_info)
+            except Exception:
+                return {"score": 50, "details": []}
+
+        def _prepare_sentiment():
+            try:
+                from analysis.sentiment import analyze_sentiment
+                return analyze_sentiment(news_texts)
+            except Exception:
+                return {"score":0.5,"label":"中性","positive_count":0,
+                         "negative_count":0,"neutral_count":0,"news_count":0}
+
+        prog.progress(32, "基本面 + 指标 + 情感...")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            indicator_future = executor.submit(_prepare_indicators)
+            fundamental_future = executor.submit(_prepare_fundamental)
+            sentiment_future = executor.submit(_prepare_sentiment)
+
+            df, signals, sr = indicator_future.result()
+            r["fundamental"] = fundamental_future.result()
+            r["sentiment"] = sentiment_future.result()
+        r.update(df=df, signals=signals, sr=sr)
 
         if fast_mode:
             prog.progress(55, "训练预测模型（快速模式，约30秒）...")
